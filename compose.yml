@@ -1,0 +1,19 @@
+version: '3'
+services:
+  lightstream:
+    build:
+      context: .
+      dockerfile: Dockerfile  # Adjust if your Dockerfile has a different name
+    depends_on:
+      - syclla_db
+  # TODO: https://opensource.docs.scylladb.com/stable/operating-scylla/procedures/tips/best-practices-scylla-on-docker.html#configuring-a-data-volume-for-storage
+  syclla_db:
+    build: 
+      context: .
+      dockerfile: ./scylladb/Dockerfile
+    ports:
+      - "9042:9042"  # Expose CQL port
+      - "9180:9180"  # Expose Prometheus metrics port
+    environment:
+      - SCYLLA_RPC_ADDRESS=0.0.0.0
+      - SCYLLA_LISTEN_ADDRESS=0.0.0.0

@@ -22,7 +22,15 @@ pub trait MetadataClient {
 }
 
 pub struct SyclladbMetadataClient {
+    pub url: String,
+}
 
+impl SyclladbMetadataClient {
+    pub fn new(url: &str) -> Self {
+        Self {
+            url: url.to_string(),
+        }
+    }
 }
 
 impl MetadataClient for SyclladbMetadataClient {
