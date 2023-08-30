@@ -1,79 +1,37 @@
-use std::env;
-
-use byteorder::ByteOrder;
-use foundationdb::{Database, tuple::Subspace, Transaction, options, FdbError};
-
-use crate::metadata::TopicMetadata;
-
 mod metadata;
 
-const API_VERSION: i32 =710;
-
-const TOPIC_METADATA_SUBSPACE: &'static str = "topic_metadata";
+use crate::metadata::MetadataClient;
 
 fn main() -> anyhow::Result<()> {
+    // construct a subscriber that prints formatted traces to stdout
+    let subscriber = tracing_subscriber::FmtSubscriber::new();
+    // use that subscriber to process traces emitted after this point
+    tracing::subscriber::set_global_default(subscriber)?;
+
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("could not create runtime");
+
     runtime.block_on(test());
+
     loop { }
 }
 
 async fn test() {
     println!("made it to test!!");
     let _guard = unsafe { foundationdb::boot() };
-    let db = foundationdb::Database::default().expect("could not open database");
+    let metadata_client = metadata::FdbMetadataClient::new();
 
-    let topic_metadata_subspace = Subspace::all().subspace(&TOPIC_METADATA_SUBSPACE);
-
-    let topic_name = "test_topic_name";
-    let counter_key = topic_metadata_subspace.pack(&topic_name);
-
-    // write initial value
-    let trx = db.create_trx().expect("could not create transaction");
-    increment(&trx, &counter_key, 1);
-    trx.commit().await.expect("could not commit");
-
-    // read counter
-    let trx = db.create_trx().expect("could not create transaction");
-    let v1 = read_counter(&trx, &counter_key)
-        .await
-        .expect("could not read counter");
-    dbg!(v1);
-    assert!(v1 > 0);
-
-    // decrement
-    let trx = db.create_trx().expect("could not create transaction");
-    increment(&trx, &counter_key, -1);
-    trx.commit().await.expect("could not commit");
-
-    let trx = db.create_trx().expect("could not create transaction");
-    let v2 = read_counter(&trx, &counter_key)
-        .await
-        .expect("could not read counter");
-    dbg!(v2);
-    assert_eq!(v1 - 1, v2);
+    for i in 0..10_000_000 {
+        let topic_name = format!("test_topic_{}", i);
+        metadata_client.create_topic(&topic_name).await.expect("could not create topic");
+    }
 }
 
-fn increment(trx: &Transaction, key: &[u8], incr: i64) {
-    // generate the right buffer for atomic_op
-    let mut buf = [0u8; 8];
-    byteorder::LE::write_i64(&mut buf, incr);
 
-    trx.atomic_op(key, &buf, options::MutationType::Add);
-}
 
-async fn read_counter(trx: &Transaction, key: &[u8]) -> Result<i64, FdbError> {
-    let raw_counter = trx
-        .get(key, true)
-        .await
-        .expect("could not read key")
-        .expect("no value found");
 
-    let counter = byteorder::LE::read_i64(raw_counter.as_ref());
-    Ok(counter)
-}
 
 // fn main() {
 //     let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
