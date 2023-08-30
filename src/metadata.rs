@@ -1,7 +1,6 @@
 use anyhow::Result;
-use scylla::FromRow;
 
-#[derive(Debug, FromRow)]
+#[derive(Debug)]
 pub struct TopicMetadata {
     pub topic_name: String,
     pub high_watermark: i64,

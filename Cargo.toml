@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.75" 
+byteorder = "1.4.3"
 foundationdb = { version = "0.8.0", features = ["embedded-fdb-include"] }
 futures = "0.3.28"
-scylla = "0.9.0"
 tokio = { version = "1.32.0", features = ["full"] }
