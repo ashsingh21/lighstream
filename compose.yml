@@ -4,16 +4,40 @@ services:
     build:
       context: .
       dockerfile: Dockerfile  # Adjust if your Dockerfile has a different name
-    depends_on:
-      - syclla_db
-  # TODO: https://opensource.docs.scylladb.com/stable/operating-scylla/procedures/tips/best-practices-scylla-on-docker.html#configuring-a-data-volume-for-storage
-  syclla_db:
-    build: 
-      context: .
-      dockerfile: ./scylladb/Dockerfile
-    ports:
-      - "9042:9042"  # Expose CQL port
-      - "9180:9180"  # Expose Prometheus metrics port
+      args:
+        FDB_VERSION: ${FDB_VERSION}
+    network_mode: host
     environment:
-      - SCYLLA_RPC_ADDRESS=0.0.0.0
-      - SCYLLA_LISTEN_ADDRESS=0.0.0.0
+      FDB_COORDINATOR: ${FDB_COORDINATOR}
+      FDB_API_VERSION: ${FDB_API_VERSION}
+    depends_on:
+      - fdb-coordinator
+      - fdb-server-1
+      - fdb-server-2
+  # Specify three fdbserver processes.
+  fdb-coordinator:
+    image: foundationdb/foundationdb:${FDB_VERSION}
+    ports:
+      - 4500:4500/tcp
+    environment:
+      FDB_COORDINATOR: ${FDB_COORDINATOR}
+      FDB_NETWORKING_MODE: ${FDB_NETWORKING_MODE}
+      FDB_COORDINATOR_PORT: ${FDB_COORDINATOR_PORT}
+
+  fdb-server-1:
+    depends_on:
+      - fdb-coordinator
+    image: foundationdb/foundationdb:${FDB_VERSION}
+    environment:
+      FDB_COORDINATOR: ${FDB_COORDINATOR}
+      FDB_NETWORKING_MODE: ${FDB_NETWORKING_MODE}
+      FDB_COORDINATOR_PORT: ${FDB_COORDINATOR_PORT}
+
+  fdb-server-2:
+    depends_on:
+      - fdb-coordinator
+    image: foundationdb/foundationdb:${FDB_VERSION}
+    environment:
+      FDB_COORDINATOR: ${FDB_COORDINATOR}
+      FDB_NETWORKING_MODE: ${FDB_NETWORKING_MODE}
+      FDB_COORDINATOR_PORT: ${FDB_COORDINATOR_PORT}
