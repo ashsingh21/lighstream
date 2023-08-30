@@ -6,47 +6,57 @@ use crate::metadata::TopicMetadata;
 
 mod metadata;
 
+const API_VERSION: i32 =710;
+
 fn main() {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+    println!("Hello, world!");
     rt.block_on(app()).expect("Failed to run app");
-    loop {}
 }
 
 async fn app() -> anyhow::Result<()> {
-    let uri = env::var("SCYLLA_URI").unwrap_or_else(|_| "127.0.0.1:9042".to_string());
-    println!("Connecting to {} ...", uri);
-    let session: Session = SessionBuilder::new().known_node(uri).build().await?;
-    // session.query("CREATE KEYSPACE IF NOT EXISTS ks WITH REPLICATION = {'class' : 'NetworkTopologyStrategy', 'replication_factor' : 1}", &[]).await?;
+    use foundationdb::api::FdbApiBuilder;
 
-    // session
-    //     .query(
-    //         "CREATE TABLE IF NOT EXISTS ks.t (a int, b int, c text, primary key (a, b))",
-    //         &[],
-    //     )
-    //     .await?;
+    let network_builder = {
+        let builder = FdbApiBuilder::default();
+        let builder = builder.set_runtime_version(API_VERSION);
+        builder.build().expect("fdb api failed to be initialized")
+    };
 
-    // session
-    //     .query("INSERT INTO ks.t (a, b, c) VALUES (?, ?, ?)", (3, 4, "def"))
-    //     .await?;
+    let guard = unsafe { network_builder.boot() };
 
-    // session
-    //     .query("INSERT INTO ks.t (a, b, c) VALUES (1, 2, 'abc')", &[])
-    //     .await?;
-
-
-    session
-        .query("UPDATE lightstream.topic_metadata SET low_watermark = low_watermark + ?, high_watermark = high_watermark + ? WHERE topic_name = ?", 
-        (0_i64, 1_i64, "test_topic_light_stream"))
-        .await?;
-
-
-    if let Some(rows) = session.query("SELECT topic_name, high_watermark, low_watermark FROM lightstream.topic_metadata", &[]).await?.rows {
-        for row_data in rows.into_typed::<(String, Counter, Counter)>() {
-            println!("here");
-            let row_data = row_data?;
-            println!("row_data: {:?}", row_data);
-        }
-    }
+    // Have fun with the FDB API
+    hello_world().await.expect("could not run the hello world");
     
+    drop(guard);
+
+    Ok(())
+}
+
+async fn hello_world() -> foundationdb::FdbResult<()> {
+    println!("here...");
+    let db = foundationdb::Database::default()?;
+
+    // write a value in a retryable closure
+    match db
+        .run(|trx, _maybe_committed| async move {
+            trx.set(b"hello", b"world");
+            Ok(())
+        })
+        .await
+    {
+        Ok(_) => println!("transaction committed"),
+        Err(_) => eprintln!("cannot commit transaction"),
+    };
+
+    // read a value
+    match db
+        .run(|trx, _maybe_committed| async move { Ok(trx.get(b"hello", false).await.unwrap()) })
+        .await
+    {
+        Ok(slice) => assert_eq!(b"world", slice.unwrap().as_ref()),
+        Err(_) => eprintln!("cannot commit transaction"),
+    }
+
     Ok(())
 }
