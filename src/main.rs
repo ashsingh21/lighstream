@@ -1,5 +1,7 @@
 mod metadata;
 
+use tracing::info;
+
 use crate::metadata::MetadataClient;
 
 fn main() -> anyhow::Result<()> {
@@ -23,9 +25,15 @@ async fn test() {
     let _guard = unsafe { foundationdb::boot() };
     let metadata_client = metadata::FdbMetadataClient::new();
 
-    for i in 0..10_000_000 {
+    for i in 0..10_000 {
         let topic_name = format!("test_topic_{}", i);
-        metadata_client.create_topic(&topic_name).await.expect("could not create topic");
+        metadata_client.create_topic(&topic_name.clone()).await.expect("could not create topic");
+    }
+
+    for i in 0..10_000 {
+        let topic_name = format!("test_topic_{}", i);
+        let topic_metadata = metadata_client.get_topic_metadata(&topic_name).await.expect("could not get topic metadata");
+        info!("topic_metadata: {:?}", topic_metadata);
     }
 }
 

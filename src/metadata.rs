@@ -4,13 +4,14 @@ use byteorder::ByteOrder;
 use foundationdb::{tuple::Subspace, Transaction, options, FdbError};
 use tracing::{info};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TopicMetadata {
     pub topic_name: String,
     pub high_watermark: i64,
     pub low_watermark: i64,
 }
 
+#[derive(Debug, Clone)]
 pub struct ConsumerGroupMetadata {
     pub consumer_group: String,
     pub offsets: Vec<(String, i64)>,
@@ -22,7 +23,7 @@ pub trait MetadataClient {
 
     fn get_topics(&self) -> Result<Vec<String>>;
 
-    fn get_topic_metadata(&self, topic_name: &str) -> Result<TopicMetadata>;
+    async fn get_topic_metadata(&self, topic_name: &str) -> Result<TopicMetadata>;
 
     fn update_topic_highwatermark (&self, topic_name: &str, high_watermark: i64) -> Result<()>;
 
@@ -88,6 +89,8 @@ impl MetadataClient for FdbMetadataClient {
         let high_watermark_key = topic_name_subspace.pack(&"high_watermark");
 
         Self::increment(&trx, &low_watermark_key, 0);
+        Self::increment(&trx, &high_watermark_key, 0);
+
         match trx.commit().await {
             Ok(_) => {},
             Err(e) => {
@@ -97,16 +100,6 @@ impl MetadataClient for FdbMetadataClient {
             }
         }
   
-        let trx = self.db.create_trx().expect("could not create transaction");
-        Self::increment(&trx, &high_watermark_key, 0);
-        match trx.commit().await {
-            Ok(_) => {},
-            Err(e) => {
-                info!("error in creating topic while setting high watermark: {}", e);
-                // FIXME: return error
-                return Ok(());
-            }
-        }
         let trx = self.db.create_trx().expect("could not create transaction");
         let low_watermark = Self::read_counter(&trx, &low_watermark_key)
             .await
@@ -125,8 +118,23 @@ impl MetadataClient for FdbMetadataClient {
         todo!()
     }
 
-    fn get_topic_metadata(&self, topic_name: &str) -> Result<TopicMetadata> {
-        todo!()
+    async fn get_topic_metadata(&self, topic_name: &str) -> Result<TopicMetadata> {
+        let trx = self.db.create_trx().expect("could not create transaction");
+        let topic_name_subspace = self.topic_metadata_subspace.subspace(&topic_name);
+
+        let low_watermark_key = topic_name_subspace.pack(&"low_watermark");
+        let high_watermark_key = topic_name_subspace.pack(&"high_watermark");
+
+        let low_watermark = Self::read_counter(&trx, &low_watermark_key).await
+            .expect("could not read counter");
+        let high_watermark = Self::read_counter(&trx, &high_watermark_key).await
+            .expect("could not read counter");
+
+        Ok(TopicMetadata {
+            topic_name: topic_name.to_string(),
+            low_watermark,
+            high_watermark,
+        })
     }
 
     fn get_consumer_groups(&self) -> Result<Vec<String>> {
