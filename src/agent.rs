@@ -36,7 +36,7 @@ impl Agent {
         let buffer = Arc::new(DashMap::<String, Bytes>::with_capacity(10_000));
         let metadata_client = Arc::new(metadata::FdbMetadataClient::new());
 
-        message_receiver.for_each_concurrent(100, |command| async  {
+        message_receiver.for_each_concurrent(20, |command| async  {
             debug!("got message...");
             let buf = buffer.clone();
             let client = metadata_client.clone();
@@ -47,13 +47,12 @@ impl Agent {
                     buf.insert(topic_name.clone(), message);
                 }
             }
-            
 
             if buf.len() >= 500 {
                 // pretend messages were send
                 debug!("buffer limit reached attempting to send messages...");
                 let start = tokio::time::Instant::now();
-                // get  keys from buffer
+      
                 let keys = buf.iter().map(|x| x.key().clone()).collect::<Vec<_>>();
                 let keys_refs = keys.iter().map(|x| x.as_str()).collect::<Vec<_>>();
                 client.increment_high_watermarks(&keys_refs).await.expect("could not increment high watermarks");
@@ -62,7 +61,6 @@ impl Agent {
                 info!("sent messages in {:?}", start.elapsed());
                 debug!("incremented high watermarks for topics: {:?}", keys);
             }
-            debug!("buffer size: {}", buf.len());
         }).await;
 
     }
