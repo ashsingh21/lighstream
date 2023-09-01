@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
 
                 if n >= 50_000 {
                     n = 0;
-                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
                 } 
 
                 let topic_name = topic_names.choose(&mut rand::thread_rng()).unwrap();
