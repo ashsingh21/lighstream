@@ -5,7 +5,7 @@ mod agent;
 use std::{thread, sync::Arc};
 
 use bytes::Bytes;
-use rand::{Rng, distributions::Alphanumeric, seq::SliceRandom};
+use rand::{Rng, seq::SliceRandom};
 use tracing::{info, debug};
 
 use crate::metadata::MetadataClient;
@@ -47,9 +47,9 @@ fn main() -> anyhow::Result<()> {
 
             loop {
 
-                if n >= 20_000 {
+                if n >= 50_000 {
                     n = 0;
-                    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                 } 
 
                 let topic_name = topic_names.choose(&mut rand::thread_rng()).unwrap();

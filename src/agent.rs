@@ -49,7 +49,7 @@ impl Agent {
             }
             
 
-            if buf.len() >= 1_000 {
+            if buf.len() >= 500 {
                 // pretend messages were send
                 debug!("buffer limit reached attempting to send messages...");
                 let start = tokio::time::Instant::now();
