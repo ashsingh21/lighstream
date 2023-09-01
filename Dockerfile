@@ -22,4 +22,3 @@ COPY start.bash /start.bash
 RUN cargo install --path .
 
 CMD ["/start.bash"]
-# CMD ["lightstream"]
