@@ -32,10 +32,10 @@ fn main() -> anyhow::Result<()> {
             let mut start_id = 0;
 
             loop {
-                info!("sending message..." );
                 start_id = start_id % 100_000;
-                let msg = (format!("test_topic_{}", start_id), bytes.clone());
-                factory.cast(ractor::factory::FactoryMessage::Dispatch(ractor::factory::Job { key: msg.0.clone() , msg, options: JobOptions::default() })).expect("could not send message");
+                let key = format!("test_topic_{}", start_id);
+                let msg = message_collector::MessageCollectorWorkerOperation::Collect((key.clone(), bytes.clone()));
+                factory.cast(ractor::factory::FactoryMessage::Dispatch(ractor::factory::Job { key: key.clone() , msg, options: JobOptions::default() })).expect("could not send message");
                 start_id += 1;
             }
             // factory.stop(None);

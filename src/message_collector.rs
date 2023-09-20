@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use ractor::{
-    factory::{WorkerBuilder, WorkerMessage, WorkerStartContext, FactoryMessage},
+    factory::{WorkerBuilder, WorkerMessage, WorkerStartContext, FactoryMessage, Job, JobOptions},
     Actor, ActorProcessingErr, ActorRef, concurrency::JoinHandle,
 };
 use tracing::info;
@@ -9,8 +9,13 @@ use tracing::info;
 
 pub type TopicName = String;
 pub type MessageData = Bytes;
-
 pub type Message = (TopicName, MessageData);
+
+pub enum MessageCollectorWorkerOperation {
+    Flush,
+    Collect (Message),
+}
+
 
 pub struct MessageCollectorWorker { 
     worker_id: ractor::factory::WorkerId,
@@ -18,20 +23,31 @@ pub struct MessageCollectorWorker {
 
 pub struct MessageCollectorState {
     messages: Vec<Message>,
-    worker_state: WorkerStartContext<TopicName, Message>,
+    worker_state: WorkerStartContext<String, MessageCollectorWorkerOperation>,
 }
 
 #[async_trait::async_trait]
 impl Actor for MessageCollectorWorker {
     type State = MessageCollectorState;
-    type Msg = WorkerMessage<TopicName, Message>;
-    type Arguments = WorkerStartContext<TopicName, Message>;
+    type Msg = WorkerMessage<String, MessageCollectorWorkerOperation>;
+    type Arguments = WorkerStartContext<String, MessageCollectorWorkerOperation>;
 
     async fn pre_start(
         &self,
-        _myself: ActorRef<Self::Msg>,
+        myself: ActorRef<Self::Msg>,
         startup_context: Self::Arguments,
     ) -> Result<Self::State, ActorProcessingErr> {
+
+        let wid = startup_context.wid.clone();
+        myself.send_interval(ractor::concurrency::tokio_primatives::Duration::from_millis(50), move || {
+            // TODO: make sure this gets uniformly distributed to all workers
+            WorkerMessage::Dispatch(Job {
+                key: format!("flush_{}", wid.clone()),
+                msg: MessageCollectorWorkerOperation::Flush,
+                options: JobOptions::default(),
+            })
+        });
+
         Ok(MessageCollectorState {
             messages: Vec::new(),
             worker_state: startup_context,
@@ -56,8 +72,17 @@ impl Actor for MessageCollectorWorker {
                     ))?;
             }
             WorkerMessage::Dispatch(job) => {
-                info!("worker {} got job: {:?}", state.worker_state.wid, job.msg);
-                state.messages.push(job.msg);
+                match job.msg {
+                    MessageCollectorWorkerOperation::Collect(message) => {
+                        // info!("worker {} got collect: {:?}", state.worker_state.wid, message);
+                        state.messages.push(message);
+                    }
+                    MessageCollectorWorkerOperation::Flush => {
+                        info!("worker {} got flush", state.worker_state.wid);
+                        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                        state.messages.clear();      
+                    }
+                }
 
                 // tell the factory job is finished
                 state
@@ -86,12 +111,12 @@ impl WorkerBuilder<MessageCollectorWorker> for MessageCollectorWorkerBuilder {
 pub struct MessageCollectorFactory;
 
 impl MessageCollectorFactory {
-    pub async fn create(num_workers: usize) -> (ActorRef<FactoryMessage<TopicName, Message>>, JoinHandle<()>) {
+    pub async fn create(num_workers: usize) -> (ActorRef<FactoryMessage<TopicName, MessageCollectorWorkerOperation>>, JoinHandle<()>) {
         let factory_definition =
-            ractor::factory::Factory::<TopicName, Message, MessageCollectorWorker> {
+            ractor::factory::Factory::<TopicName, MessageCollectorWorkerOperation, MessageCollectorWorker> {
                 worker_count: num_workers,
                 collect_worker_stats: false,
-                routing_mode: ractor::factory::RoutingMode::<TopicName>::KeyPersistent,
+                routing_mode: ractor::factory::RoutingMode::<String>::KeyPersistent,
                 ..Default::default()
             };
     

@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    message_collector::{MessageCollectorWorker, MessageCollectorWorkerBuilder, TopicName, MessageCollectorFactory},
+    message_collector::{MessageCollectorWorker, MessageCollectorWorkerBuilder, TopicName, MessageCollectorFactory, MessageCollectorWorkerOperation},
     metadata::{self, MetadataClient},
 };
 
@@ -54,7 +54,7 @@ impl Agent {
                         debug!("got send command...");
                         message_collector_factory.cast(
                             FactoryMessage::Dispatch(
-                                Job { key: topic_name.clone(), msg: (topic_name, message), options: JobOptions::default() }))
+                                Job { key: topic_name.clone(), msg: MessageCollectorWorkerOperation::Collect((topic_name, message)), options: JobOptions::default() }))
                                 .expect("could not send message")
                     }
                 }
