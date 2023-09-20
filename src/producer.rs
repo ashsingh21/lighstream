@@ -8,17 +8,13 @@ struct Producer {
 impl Producer {
     pub fn new() -> Self {
         let metadata_client = metadata::FdbMetadataClient::new();
-        Self {
-            metadata_client,
-        }
+        Self { metadata_client }
     }
 
     pub async fn send(&self, topic_name: &str, bytes: &[u8]) -> anyhow::Result<()> {
         let topic_metadata = self.metadata_client.get_topic_metadata(topic_name).await?;
 
         // send bytes
-        
-
 
         Ok(())
     }
@@ -27,7 +23,10 @@ impl Producer {
         self.metadata_client.create_topic(topic_name).await
     }
 
-    pub async fn get_topic_metadata(&self, topic_name: &str) -> anyhow::Result<metadata::TopicMetadata> {
+    pub async fn get_topic_metadata(
+        &self,
+        topic_name: &str,
+    ) -> anyhow::Result<metadata::TopicMetadata> {
         self.metadata_client.get_topic_metadata(topic_name).await
     }
 }

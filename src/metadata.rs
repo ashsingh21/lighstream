@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use byteorder::ByteOrder;
-use foundationdb::{tuple::Subspace, Transaction, options, FdbError};
+use foundationdb::{options, tuple::Subspace, FdbError, Transaction};
 use tracing::info;
 
 #[derive(Debug, Clone)]
@@ -31,7 +31,7 @@ pub trait MetadataClient {
 
     async fn get_topic_metadata(&self, topic_name: &str) -> Result<TopicMetadata>;
 
-    async fn increment_high_watermark (&self, topic_name: &str) -> Result<()>;
+    async fn increment_high_watermark(&self, topic_name: &str) -> Result<()>;
 
     async fn increment_high_watermarks(&self, topic_names: &[&str]) -> Result<()>;
 
@@ -44,10 +44,9 @@ pub trait MetadataClient {
     fn update_consumer_group_offset(&self, consumer_group: &str, offset: i64) -> Result<()>;
 }
 
-
 /// uses the FoundationDb to store metadata
 pub struct FdbMetadataClient {
-    db:  foundationdb::Database,
+    db: foundationdb::Database,
     topic_metadata_subspace: Subspace,
     consumer_group_metadata_subspace: Subspace,
 }
@@ -70,7 +69,7 @@ impl FdbMetadataClient {
         // generate the right buffer for atomic_op
         let mut buf = [0u8; 8];
         byteorder::LE::write_i64(&mut buf, incr);
-    
+
         trx.atomic_op(key, &buf, options::MutationType::Add);
     }
 
@@ -81,7 +80,7 @@ impl FdbMetadataClient {
             .await
             .expect("could not read key")
             .expect(format!("no value found for key: {}", String::from_utf8_lossy(key)).as_str());
-    
+
         let counter = byteorder::LE::read_i64(raw_counter.as_ref());
         Ok(counter)
     }
@@ -100,14 +99,14 @@ impl MetadataClient for FdbMetadataClient {
         Self::increment(&trx, &high_watermark_key, 0);
 
         match trx.commit().await {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => {
                 info!("error in creating topic while setting low watermark: {}", e);
                 // FIXME: return error
                 return Ok(());
             }
         }
-  
+
         // let trx = self.db.create_trx().expect("could not create transaction");
         // let low_watermark = Self::read_counter(&trx, &low_watermark_key)
         //     .await
@@ -135,9 +134,11 @@ impl MetadataClient for FdbMetadataClient {
         let low_watermark_key = topic_name_subspace.pack(&"low_watermark");
         let high_watermark_key = topic_name_subspace.pack(&"high_watermark");
 
-        let low_watermark = Self::read_counter(&trx, &low_watermark_key).await
+        let low_watermark = Self::read_counter(&trx, &low_watermark_key)
+            .await
             .expect("could not read counter");
-        let high_watermark = Self::read_counter(&trx, &high_watermark_key).await
+        let high_watermark = Self::read_counter(&trx, &high_watermark_key)
+            .await
             .expect("could not read counter");
 
         Ok(TopicMetadata {
@@ -158,7 +159,7 @@ impl MetadataClient for FdbMetadataClient {
         }
 
         match trx.commit().await {
-            Ok(_) => { return Ok(()) },
+            Ok(_) => return Ok(()),
             Err(e) => {
                 info!("error in updating topic high watermark: {}", e);
                 // TODO: return error
@@ -168,7 +169,7 @@ impl MetadataClient for FdbMetadataClient {
         Ok(())
     }
 
-    async fn increment_high_watermark (&self, topic_name: &str) -> Result<()> {
+    async fn increment_high_watermark(&self, topic_name: &str) -> Result<()> {
         let trx = self.db.create_trx().expect("could not create transaction");
         let topic_name_subspace = self.topic_metadata_subspace.subspace(&topic_name);
 
@@ -176,7 +177,7 @@ impl MetadataClient for FdbMetadataClient {
         Self::increment(&trx, &high_watermark_key, 1);
 
         match trx.commit().await {
-            Ok(_) => { return Ok(()) },
+            Ok(_) => return Ok(()),
             Err(e) => {
                 info!("error in updating topic high watermark: {}", e);
                 // FIXME: return error
