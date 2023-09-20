@@ -3,7 +3,9 @@ use ractor::{
     factory::{WorkerBuilder, WorkerMessage, WorkerStartContext, FactoryMessage, Job, JobOptions},
     Actor, ActorProcessingErr, ActorRef, concurrency::JoinHandle,
 };
-use tracing::info;
+use tracing::{info, error, debug};
+
+use crate::metadata::{self, MetadataClient};
 
 // Reference https://github.com/slawlor/ractor/blob/000fbb63e7c5cb9fa522535565d1d74c48df7f8e/ractor/src/factory/tests/mod.rs#L156
 
@@ -17,13 +19,14 @@ pub enum MessageCollectorWorkerOperation {
 }
 
 
-pub struct MessageCollectorWorker { 
-    worker_id: ractor::factory::WorkerId,
-}
-
 pub struct MessageCollectorState {
     messages: Vec<Message>,
     worker_state: WorkerStartContext<String, MessageCollectorWorkerOperation>,
+}
+
+pub struct MessageCollectorWorker { 
+    worker_id: ractor::factory::WorkerId,
+    metadata_client: metadata::FdbMetadataClient,
 }
 
 #[async_trait::async_trait]
@@ -39,7 +42,7 @@ impl Actor for MessageCollectorWorker {
     ) -> Result<Self::State, ActorProcessingErr> {
 
         let wid = startup_context.wid.clone();
-        myself.send_interval(ractor::concurrency::tokio_primatives::Duration::from_millis(200), move || {
+        myself.send_interval(ractor::concurrency::tokio_primatives::Duration::from_millis(100), move || {
             // TODO: make sure this gets uniformly distributed to all workers
             WorkerMessage::Dispatch(Job {
                 key: format!("flush_{}", wid.clone()),
@@ -62,7 +65,7 @@ impl Actor for MessageCollectorWorker {
     ) -> Result<(), ActorProcessingErr> {
         match message {
             WorkerMessage::FactoryPing(time) => {
-                info!("worker {} got ping", state.worker_state.wid);
+                debug!("worker {} got ping", state.worker_state.wid);
                 state
                     .worker_state
                     .factory
@@ -74,13 +77,25 @@ impl Actor for MessageCollectorWorker {
             WorkerMessage::Dispatch(job) => {
                 match job.msg {
                     MessageCollectorWorkerOperation::Collect(message) => {
-                        // info!("worker {} got collect: {:?}, len: {}", state.worker_state.wid, message, state.messages.len());
+                        debug!("worker {} got collect: {:?}, len: {}", state.worker_state.wid, message, state.messages.len());
                         state.messages.push(message);
                     }
                     MessageCollectorWorkerOperation::Flush => {
-                        info!("worker {} got flush len: {}", state.worker_state.wid, state.messages.len());
+                        debug!("worker {} got flush len: {}", state.worker_state.wid, state.messages.len());
 
-                        state.messages.clear();      
+                        if state.messages.len() > 0 {
+                            match self.upload_to_s3(&state.messages).await {
+                                Ok(_) => {                             
+                                    self.commit(&state.messages).await?;
+                                    state.messages.clear(); 
+                                }
+
+                                Err(e) => {
+                                    error!("error in uploading to s3: {}", e);
+
+                                }
+                            };
+                        }
                     }
                 }
 
@@ -99,18 +114,36 @@ impl Actor for MessageCollectorWorker {
     }
 }
 
+impl MessageCollectorWorker {
+    async fn commit<T: AsRef<[Message]>>(&self, batch: T) -> anyhow::Result<()> {
+        let batch = batch.as_ref();
+        info!("committing batch of size {}", batch.len());
+        let result = self.metadata_client.commit_batch(batch).await;
+        info!("committed batch of size {}", batch.len());
+        result
+    }   
+
+    async fn upload_to_s3<T: AsRef<[Message]>>(&self, _batch: T) -> anyhow::Result<()> {
+        info!("batch uploaded to s3...");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        Ok(())
+    }
+}
+
 pub struct MessageCollectorWorkerBuilder;
 
 impl WorkerBuilder<MessageCollectorWorker> for MessageCollectorWorkerBuilder {
     fn build(&self, wid: ractor::factory::WorkerId) -> MessageCollectorWorker {
-        MessageCollectorWorker { worker_id: wid }
+        MessageCollectorWorker { worker_id: wid, metadata_client: metadata::FdbMetadataClient::try_new().expect("couldn't create metadata client") }
     }
 }
 
 pub struct MessageCollectorFactory;
 
+pub type ActorFactory = ActorRef<FactoryMessage<TopicName, MessageCollectorWorkerOperation>>;
+
 impl MessageCollectorFactory {
-    pub async fn create(num_workers: usize) -> (ActorRef<FactoryMessage<TopicName, MessageCollectorWorkerOperation>>, JoinHandle<()>) {
+    pub async fn create(num_workers: usize) -> (ActorFactory, JoinHandle<()>) {
         let factory_definition =
             ractor::factory::Factory::<TopicName, MessageCollectorWorkerOperation, MessageCollectorWorker> {
                 worker_count: num_workers,

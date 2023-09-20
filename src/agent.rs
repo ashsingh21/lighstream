@@ -31,7 +31,7 @@ pub struct Agent {
 
 impl Agent {
     pub fn new() -> Self {
-        let metadata_client = metadata::FdbMetadataClient::new();
+        let metadata_client = metadata::FdbMetadataClient::try_new().expect("could not create metadata client");
         Self { metadata_client }
     }
 

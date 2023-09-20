@@ -4,6 +4,8 @@ use byteorder::ByteOrder;
 use foundationdb::{options, tuple::Subspace, FdbError, Transaction};
 use tracing::info;
 
+use crate::message_collector::Message;
+
 #[derive(Debug, Clone)]
 pub struct TopicMetadata {
     pub topic_name: String,
@@ -26,6 +28,8 @@ pub struct IncrementHighWatermark {
 #[async_trait]
 pub trait MetadataClient {
     async fn create_topic(&self, topic_name: &str) -> Result<()>;
+
+    async fn commit_batch(&self, batch: &[Message]) -> anyhow::Result<()>;
 
     fn get_topics(&self) -> Result<Vec<String>>;
 
@@ -52,16 +56,18 @@ pub struct FdbMetadataClient {
 }
 
 impl FdbMetadataClient {
-    pub fn new() -> Self {
-        let db = foundationdb::Database::default().expect("could not open database");
+    pub fn try_new() -> anyhow::Result<Self> {
+        let db = foundationdb::Database::default()?;
+        db.set_option(options::DatabaseOption::TransactionRetryLimit(3))?;
         let topic_metadata_subspace = Subspace::all().subspace(&"topic_metadata");
         let consumer_group_metadata_subspace = Subspace::all().subspace(&"consumer_group_metadata");
 
-        Self {
+
+        Ok(Self {
             db,
             topic_metadata_subspace,
             consumer_group_metadata_subspace,
-        }
+        })
     }
 
     #[inline]
@@ -118,6 +124,24 @@ impl MetadataClient for FdbMetadataClient {
         // dbg!(high_watermark);
         info!("created topic: {}", topic_name);
 
+        Ok(())
+    }
+
+    async fn commit_batch(&self, batch: &[Message]) -> anyhow::Result<()> {
+        self.db.run(|trx, _maybe_committed| async move {
+            trx.set_option(options::TransactionOption::Timeout(1000))?;
+            for message in batch{
+                let topic_name_subspace = self.topic_metadata_subspace.subspace(&message.0);
+    
+                // let low_watermark_key = topic_name_subspace.pack(&"low_watermark");
+                let topic_high_watermark_key = topic_name_subspace.pack(&"high_watermark");
+    
+                // Self::increment(&trx, &low_watermark_key, 1);
+                Self::increment(&trx, &topic_high_watermark_key, 1);
+            }
+
+            Ok(())
+        }).await?;
         Ok(())
     }
 
