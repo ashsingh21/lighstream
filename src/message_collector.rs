@@ -39,7 +39,7 @@ impl Actor for MessageCollectorWorker {
     ) -> Result<Self::State, ActorProcessingErr> {
 
         let wid = startup_context.wid.clone();
-        myself.send_interval(ractor::concurrency::tokio_primatives::Duration::from_millis(50), move || {
+        myself.send_interval(ractor::concurrency::tokio_primatives::Duration::from_millis(200), move || {
             // TODO: make sure this gets uniformly distributed to all workers
             WorkerMessage::Dispatch(Job {
                 key: format!("flush_{}", wid.clone()),
@@ -49,7 +49,7 @@ impl Actor for MessageCollectorWorker {
         });
 
         Ok(MessageCollectorState {
-            messages: Vec::new(),
+            messages: Vec::with_capacity(10_000),
             worker_state: startup_context,
         })
     }
@@ -74,12 +74,12 @@ impl Actor for MessageCollectorWorker {
             WorkerMessage::Dispatch(job) => {
                 match job.msg {
                     MessageCollectorWorkerOperation::Collect(message) => {
-                        // info!("worker {} got collect: {:?}", state.worker_state.wid, message);
+                        // info!("worker {} got collect: {:?}, len: {}", state.worker_state.wid, message, state.messages.len());
                         state.messages.push(message);
                     }
                     MessageCollectorWorkerOperation::Flush => {
-                        info!("worker {} got flush", state.worker_state.wid);
-                        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+                        info!("worker {} got flush len: {}", state.worker_state.wid, state.messages.len());
+
                         state.messages.clear();      
                     }
                 }
@@ -92,7 +92,6 @@ impl Actor for MessageCollectorWorker {
                         state.worker_state.wid,
                         job.key,
                     ))?;
-                state.messages.clear();
             }
         }
 

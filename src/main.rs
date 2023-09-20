@@ -6,7 +6,7 @@ mod producer;
 use std::{sync::Arc, thread};
 
 use bytes::Bytes;
-use ractor::factory::JobOptions;
+use ractor::factory::{JobOptions, self};
 use rand::{seq::SliceRandom, Rng};
 use tracing::{debug, info};
 
@@ -31,11 +31,15 @@ fn main() -> anyhow::Result<()> {
 
             let mut start_id = 0;
 
-            loop {
+            for _ in 0..100_000_000 {
                 start_id = start_id % 100_000;
                 let key = format!("test_topic_{}", start_id);
                 let msg = message_collector::MessageCollectorWorkerOperation::Collect((key.clone(), bytes.clone()));
-                factory.cast(ractor::factory::FactoryMessage::Dispatch(ractor::factory::Job { key: key.clone() , msg, options: JobOptions::default() })).expect("could not send message");
+                let factory = factory.clone();
+                tokio::spawn( async move {
+                    factory.cast(ractor::factory::FactoryMessage::Dispatch(ractor::factory::Job { key: key.clone() , msg, options: JobOptions::default() })).expect("could not send message");
+                });
+            
                 start_id += 1;
             }
             // factory.stop(None);
