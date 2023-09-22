@@ -6,7 +6,10 @@ use std::{
 };
 
 use crate::{
-    message_collector::{MessageCollectorWorker, MessageCollectorWorkerBuilder, TopicName, MessageCollectorFactory, MessageCollectorWorkerOperation},
+    message_collector::{
+        MessageCollectorFactory, MessageCollectorWorker, MessageCollectorWorkerBuilder,
+        MessageCollectorWorkerOperation, TopicName,
+    },
     metadata::{self, MetadataClient},
 };
 
@@ -14,8 +17,8 @@ use bytes::{buf, Bytes};
 use dashmap::DashMap;
 use futures::{SinkExt, StreamExt};
 use ractor::{
-    factory::{self, Factory, FactoryMessage, Job, RoutingMode, JobOptions},
-    Actor,
+    factory::{self, Factory, FactoryMessage, Job, JobOptions, RoutingMode},
+    Actor, concurrency,
 };
 use tracing::{debug, info};
 
@@ -31,19 +34,21 @@ pub struct Agent {
 
 impl Agent {
     pub fn new() -> Self {
-        let metadata_client = metadata::FdbMetadataClient::try_new().expect("could not create metadata client");
+        let metadata_client =
+            metadata::FdbMetadataClient::try_new().expect("could not create metadata client");
         Self { metadata_client }
     }
 
-    pub async fn start(self, message_receiver: tokio::sync::mpsc::Receiver<Command>) {
+    pub async fn start(self, message_receiver: tokio::sync::mpsc::Receiver<Command>, concurrency: usize) {
         info!("starting agent...");
 
-        let (message_collector_factory, message_collector_factory_handle) = MessageCollectorFactory::create(10).await;
+        let (message_collector_factory, message_collector_factory_handle) =
+            MessageCollectorFactory::create(concurrency).await;
         // turn message_reciever into tokio receiver stream
         let message_receiver = tokio_stream::wrappers::ReceiverStream::new(message_receiver);
 
         message_receiver
-            .for_each_concurrent(20, |command| async {
+            .for_each_concurrent(10, |command| async {
                 debug!("got message...");
 
                 match command {
@@ -52,19 +57,22 @@ impl Agent {
                         message,
                     } => {
                         debug!("got send command...");
-                        message_collector_factory.cast(
-                            FactoryMessage::Dispatch(
-                                Job { key: topic_name.clone(), msg: MessageCollectorWorkerOperation::Collect((topic_name, message)), options: JobOptions::default() }))
-                                .expect("could not send message")
+                        message_collector_factory
+                            .cast(FactoryMessage::Dispatch(Job {
+                                key: topic_name.clone(),
+                                msg: MessageCollectorWorkerOperation::Collect((
+                                    topic_name, message,
+                                )),
+                                options: JobOptions::default(),
+                            }))
+                            .expect("could not send message")
                     }
                 }
-
-
             })
             .await;
 
-            message_collector_factory.stop(None);
-            message_collector_factory_handle.await.unwrap();
+        message_collector_factory.stop(None);
+        message_collector_factory_handle.await.unwrap();
     }
 
     pub async fn create_topic(&self, topic_name: &str) -> anyhow::Result<()> {

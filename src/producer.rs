@@ -8,7 +8,7 @@ struct Producer {
 impl Producer {
     pub fn new() -> Self {
         // let metadata_client = metadata::FdbMetadataClient::try_new().expect(msg);
-        Self {  }
+        Self {}
     }
 
     pub async fn send(&self, topic_name: &str, bytes: &[u8]) -> anyhow::Result<()> {
