@@ -1,19 +1,31 @@
-use std::{collections::HashMap, sync::{Mutex, Arc}, thread, rc::Rc};
+use std::{
+    collections::HashMap,
+    rc::Rc,
+    sync::{Arc, Mutex},
+    thread,
+};
 
-use crate::metadata::{self, MetadataClient};
+use crate::{
+    message_collector::{
+        MessageCollectorFactory, MessageCollectorWorker, MessageCollectorWorkerBuilder,
+        MessageCollectorWorkerOperation, TopicName,
+    },
+    metadata::{self, MetadataClient},
+};
 
-use bytes::{Bytes, buf};
+use bytes::{buf, Bytes};
 use dashmap::DashMap;
-use futures::{StreamExt, SinkExt};
-use tracing::{info, debug};
+use futures::{SinkExt, StreamExt};
+use ractor::{
+    factory::{self, Factory, FactoryMessage, Job, JobOptions, RoutingMode},
+    Actor, concurrency,
+};
+use tracing::{debug, info};
 
 #[derive(Debug)]
 pub enum Command {
     // TODO: send commmand should also contain at most once or at least once semantics
-    Send {
-        topic_name: String,
-        message: Bytes,
-    }
+    Send { topic_name: String, message: Bytes },
 }
 
 pub struct Agent {
@@ -21,55 +33,56 @@ pub struct Agent {
 }
 
 impl Agent {
-
     pub fn new() -> Self {
-        let metadata_client = metadata::FdbMetadataClient::new();
-        Self {
-            metadata_client,
-        }
+        let metadata_client =
+            metadata::FdbMetadataClient::try_new().expect("could not create metadata client");
+        Self { metadata_client }
     }
 
-    pub async fn start(self, message_receiver: tokio::sync::mpsc::Receiver<Command>) {
+    pub async fn start(self, message_receiver: tokio::sync::mpsc::Receiver<Command>, concurrency: usize) {
         info!("starting agent...");
+
+        let (message_collector_factory, message_collector_factory_handle) =
+            MessageCollectorFactory::create(concurrency).await;
         // turn message_reciever into tokio receiver stream
         let message_receiver = tokio_stream::wrappers::ReceiverStream::new(message_receiver);
-        let buffer = Arc::new(DashMap::<String, Bytes>::with_capacity(10_000));
-        let metadata_client = Arc::new(metadata::FdbMetadataClient::new());
 
-        message_receiver.for_each_concurrent(20, |command| async  {
-            debug!("got message...");
-            let buf = buffer.clone();
-            let client = metadata_client.clone();
-          
-            match command {
-                Command::Send { topic_name, message } => {
-                    debug!("got send command...");
-                    buf.insert(topic_name.clone(), message);
+        message_receiver
+            .for_each_concurrent(10, |command| async {
+                debug!("got message...");
+
+                match command {
+                    Command::Send {
+                        topic_name,
+                        message,
+                    } => {
+                        debug!("got send command...");
+                        message_collector_factory
+                            .cast(FactoryMessage::Dispatch(Job {
+                                key: topic_name.clone(),
+                                msg: MessageCollectorWorkerOperation::Collect((
+                                    topic_name, message,
+                                )),
+                                options: JobOptions::default(),
+                            }))
+                            .expect("could not send message")
+                    }
                 }
-            }
+            })
+            .await;
 
-            if buf.len() >= 500 {
-                // pretend messages were send
-                debug!("buffer limit reached attempting to send messages...");
-                let start = tokio::time::Instant::now();
-      
-                let keys = buf.iter().map(|x| x.key().clone()).collect::<Vec<_>>();
-                let keys_refs = keys.iter().map(|x| x.as_str()).collect::<Vec<_>>();
-                client.increment_high_watermarks(&keys_refs).await.expect("could not increment high watermarks");
-                // TODO: this may lead to messages missed since another could have added a message and now we just clear it
-                buf.clear();
-                info!("sent messages in {:?}", start.elapsed());
-                debug!("incremented high watermarks for topics: {:?}", keys);
-            }
-        }).await;
-
+        message_collector_factory.stop(None);
+        message_collector_factory_handle.await.unwrap();
     }
 
     pub async fn create_topic(&self, topic_name: &str) -> anyhow::Result<()> {
         self.metadata_client.create_topic(topic_name).await
     }
 
-    pub async fn get_topic_metadata(&self, topic_name: &str) -> anyhow::Result<metadata::TopicMetadata> {
+    pub async fn get_topic_metadata(
+        &self,
+        topic_name: &str,
+    ) -> anyhow::Result<metadata::TopicMetadata> {
         self.metadata_client.get_topic_metadata(topic_name).await
     }
 }

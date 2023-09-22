@@ -9,3 +9,5 @@ When I comeback I need to setup MinIO on my ssd then find a library that will al
 
 TODO:
 The design of the Agent could be Agent {Router;  Service (service is currently agent, need to chnage it to service then wrap it in agent)}
+
+Note: ActorFactory uses unbounded queue so it can cause exhaustion of memory if workers dont process  queue fast enough
