@@ -18,35 +18,35 @@ use crate::{
 
 fn main() -> anyhow::Result<()> {
 
-    // construct a subscriber that prints formatted traces to stdout
-    let subscriber = tracing_subscriber::FmtSubscriber::builder()
-        .with_max_level(tracing::Level::INFO)
-        .finish();
-    // use that subscriber to process traces emitted after this point
-    tracing::subscriber::set_global_default(subscriber)?;
+    // // construct a subscriber that prints formatted traces to stdout
+    // let subscriber = tracing_subscriber::FmtSubscriber::builder()
+    //     .with_max_level(tracing::Level::INFO)
+    //     .finish();
+    // // use that subscriber to process traces emitted after this point
+    // tracing::subscriber::set_global_default(subscriber)?;
 
-    info!("starting up");
+    // info!("starting up");
 
-    let _guard = unsafe { foundationdb::boot() };
-    let (tx, rx): (Sender<Command>, Receiver<Command>) = tokio::sync::mpsc::channel(10_000);
+    // let _guard = unsafe { foundationdb::boot() };
+    // let (tx, rx): (Sender<Command>, Receiver<Command>) = tokio::sync::mpsc::channel(1);
 
-    let _ = thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
-        rt.block_on(async {
-            let agent = agent::Agent::new();
-            agent.start(rx, 1_000).await;
-        });
-    });
+    // let _ = thread::spawn(move || {
+    //     let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+    //     rt.block_on(async {
+    //         let agent = agent::Agent::try_new(20).await.unwrap();
+    //         agent.start(rx, 1_000).await;
+    //     });
+    // });
 
-    let produce_msg = thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
-        rt.block_on(async {
-            produce_msg(tx).await;
-        });
-    });
+    // let produce_msg = thread::spawn(move || {
+    //     let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+    //     rt.block_on(async {
+    //         produce_msg(tx).await;
+    //     });
+    // });
 
 
-    produce_msg.join().expect("could not join produce_msg thread");
+    // produce_msg.join().expect("could not join produce_msg thread");
     return Ok(());
 }
 
@@ -69,8 +69,8 @@ async fn produce_msg(tx: Sender<Command>) {
         });
     }
     debug!("topics created...");
-    // constructs a ratelimiter that generates 1_000_000 tokens/s with no burst
-    let ratelimiter = Ratelimiter::builder(100, Duration::from_millis(1)).max_tokens(100)
+    // constructs a ratelimiter that generates 500_000 tokens/s with no burst
+    let ratelimiter = Ratelimiter::builder(500, Duration::from_millis(1)).max_tokens(500)
         .build()
         .expect("could not create ratelimiter");
     let mut n = 0;
