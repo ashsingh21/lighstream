@@ -10,6 +10,7 @@ RUN apt-get update
 # dnsutils is needed to have dig installed to create cluster file
 RUN apt-get install -y --no-install-recommends ca-certificates dnsutils
 RUN apt-get install -y libclang-dev
+RUN apt-get install -y protobuf-compiler
 
 RUN wget "https://github.com/apple/foundationdb/releases/download/${FDB_VERSION}/foundationdb-clients_${FDB_VERSION}-1_amd64.deb"
 RUN dpkg -i foundationdb-clients_${FDB_VERSION}-1_amd64.deb
@@ -19,6 +20,6 @@ COPY . .
 
 COPY start.bash /start.bash
 
-RUN cargo install --path .
+RUN cargo install --bin grpc-server --path .
 
 CMD ["/start.bash"]

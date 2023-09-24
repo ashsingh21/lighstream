@@ -1,17 +1,14 @@
-use std::{collections::HashMap, sync::Arc};
-
 use byteorder::ByteOrder;
 use bytes::Bytes;
 use multimap::MultiMap;
 use ractor::{
-    actor::messages,
     concurrency::JoinHandle,
-    factory::{FactoryMessage, Job, JobOptions, WorkerBuilder, WorkerMessage, WorkerStartContext},
-    Actor, ActorProcessingErr, ActorRef,
+    factory::{FactoryMessage, Job, JobOptions, WorkerBuilder, WorkerMessage, WorkerStartContext, DiscardHandler},
+    Actor, ActorProcessingErr, ActorRef, RpcReplyPort,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
-use crate::metadata::{self, MetadataClient, TopicMetadata};
+use crate::metadata::{self, TopicMetadata};
 use foundationdb::{
     options::{self, TransactionOption},
     tuple::Subspace,
@@ -25,17 +22,32 @@ const FOUNDATION_DB_KEY_TRASACTION_LIMIT: usize = 50_000; // 5 kb defual origina
 
 pub type TopicName = String;
 pub type MessageData = Bytes;
-pub type Message = (TopicName, MessageData);
+pub struct Message {
+    topic_name: TopicName, 
+    data: MessageData,
+}
+
+impl Message {
+    pub fn new(topic_name: TopicName, data: MessageData) -> Self {
+        Self {
+            topic_name,
+            data,
+        }
+    }
+}
+
+pub type ErrorCode = usize;
 
 pub enum MessageCollectorWorkerOperation {
     Flush,
-    Collect(Message),
+    Collect(Message, RpcReplyPort<ErrorCode>),
 }
 
 struct MessageState {
     messages: Vec<Message>,
     keys_size: usize,
     total_bytes: usize,
+    reply_ports: Vec<RpcReplyPort<ErrorCode>>,
 }
 
 impl MessageState {
@@ -44,12 +56,13 @@ impl MessageState {
             messages: Vec::with_capacity(10_000),
             total_bytes: 0,
             keys_size: 0,
+            reply_ports: Vec::with_capacity(500),
         }
     }
 
     fn push(&mut self, message: Message) {
-        self.keys_size += message.0.len();
-        self.total_bytes += message.0.len() + message.1.len();
+        self.keys_size += message.data.len();
+        self.total_bytes += message.data.len() + message.topic_name.len();
         self.messages.push(message);
     }
 
@@ -62,7 +75,7 @@ impl MessageState {
 
     fn will_exceed_foundation_db_transaction_limit(&self, message: &Message) -> bool {
        self.keys_size >= FOUNDATION_DB_KEY_TRASACTION_LIMIT || 
-        self.total_bytes + message.0.len() + message.1.len() >= FOUNDATION_DB_TRASACTION_LIMIT
+        self.total_bytes + message.topic_name.len() + message.data.len() >= FOUNDATION_DB_TRASACTION_LIMIT
     }
 }
 
@@ -91,7 +104,7 @@ impl Actor for MessageCollectorWorker {
     ) -> Result<Self::State, ActorProcessingErr> {
         let wid = startup_context.wid.clone();
         myself.send_interval(
-            ractor::concurrency::tokio_primatives::Duration::from_millis(100),
+            ractor::concurrency::tokio_primatives::Duration::from_millis(10),
             move || {
                 // TODO: make sure this gets uniformly distributed to all workers
                 WorkerMessage::Dispatch(Job {
@@ -126,24 +139,33 @@ impl Actor for MessageCollectorWorker {
                     ))?;
             }
             WorkerMessage::Dispatch(job) => {
-                match job.msg{
-                    MessageCollectorWorkerOperation::Collect(message) => {
+                match job.msg {
+                    MessageCollectorWorkerOperation::Collect( message , reply_port) => {
                         debug!(
-                            "worker {} got collect: {:?}, len: {}",
+                            "worker {} got collect, len: {}",
                             state.worker_state.wid,
-                            message,
                             state.message_state.messages.len()
                         );
 
                         if state.message_state.will_exceed_foundation_db_transaction_limit(&message) {
                             info!("exceeded foundation db transaction limit");
-                            self.upload_and_commit(&state.message_state.messages)
-                                .await
-                                .expect("could not upload and commit");
+                            match self.upload_and_commit(&state.message_state.messages).await {
+                                Ok(_) => {
+                                    info!("uploaded and committed");
+                                }
+                                Err(e) => {
+                                    info!("error in uploading and committing: {}, batch len: {}", e, state.message_state.messages.len());
+                                }
+                            }
                             state.message_state.clear();
+                            state.message_state.reply_ports.drain(..).for_each(|reply_port|{
+                                if reply_port.send(0).is_err() {
+                                    debug!("Listener dropped their port before we could reply");
+                                }
+                            });
                         }
-
                         state.message_state.push(message);
+                        state.message_state.reply_ports.push(reply_port);
                     }
                     MessageCollectorWorkerOperation::Flush => {
                         debug!(
@@ -153,16 +175,22 @@ impl Actor for MessageCollectorWorker {
                         );
 
                         if state.message_state.messages.len() > 0 {
-                            match self.upload_and_commit(&state.message_state.messages)
-                                .await {
+                            match self.upload_and_commit(&state.message_state.messages).await {
                                     Ok(_) => {
                                         info!("uploaded and committed");
                                     }
                                     Err(e) => {
                                         info!("error in uploading and committing: {}, batch len: {}", e, state.message_state.messages.len());
                                     }
-                                }
+                            }
+
                             state.message_state.clear();
+                            info!("replying to listeners...");
+                            state.message_state.reply_ports.drain(..).for_each(|reply_port|{
+                                if reply_port.send(0).is_err() {
+                                    debug!("Listener dropped their port before we could reply");
+                                }
+                            });
                         }
                     }
                 }
@@ -177,7 +205,6 @@ impl Actor for MessageCollectorWorker {
                     ))?;
             }
         }
-
         Ok(())
     }
 }
@@ -191,12 +218,12 @@ impl MessageCollectorWorker {
         self.metadata_client
             .db
             .run(|trx, _maybe_committed| async move {
-                trx.set_option(TransactionOption::Timeout(50_000))?;
+                trx.set_option(TransactionOption::Timeout(10_000))?;
 
                 // create topic message map from batch
                 let mut topic_message_map = TopicMessagesMap::new();
                 for message in batch.iter() {
-                    topic_message_map.insert(message.0.as_str(), message);
+                    topic_message_map.insert(&message.topic_name.as_str(), message);
                 }
 
                 match self.upload_to_s3(&topic_message_map).await {
@@ -265,6 +292,8 @@ impl MessageCollectorWorker {
         //     .expect("could not read counter");
         let high_watermark = Self::read_counter(&trx, &high_watermark_key)
             .await?;
+
+        debug!("get_topic_metadata: topic: {}, high_watermark", high_watermark);
 
         Ok(TopicMetadata {
             topic_name: topic_name.to_string(),
@@ -338,9 +367,11 @@ impl MessageCollectorFactory {
             MessageCollectorWorker,
         > {
             worker_count: num_workers,
+            // FIXME: start collecting worker stats
             collect_worker_stats: false,
             routing_mode: ractor::factory::RoutingMode::<String>::RoundRobin,
             discard_threshold: None,
+            discard_handler: None,
             ..Default::default()
         };
 
@@ -351,5 +382,18 @@ impl MessageCollectorFactory {
         )
         .await
         .expect("Failed to spawn factory")
+    }
+}
+
+struct DiscardedMessageHandler;
+
+impl DiscardHandler<TopicName, MessageCollectorWorkerOperation> for DiscardedMessageHandler
+{
+    fn discard(&self, job: Job<TopicName, MessageCollectorWorkerOperation>) {
+        info!("discarded message: {:?}........", job.key);
+    }
+
+    fn clone_box(&self) -> Box<dyn DiscardHandler<TopicName, MessageCollectorWorkerOperation>> {
+        Box::new(DiscardedMessageHandler)
     }
 }

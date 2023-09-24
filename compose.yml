@@ -10,6 +10,8 @@ services:
     environment:
       FDB_COORDINATOR: ${FDB_COORDINATOR}
       FDB_API_VERSION: ${FDB_API_VERSION}
+    ports:
+      - 50051:50051/tcp
     depends_on:
       - fdb-coordinator
       - fdb-server-1
