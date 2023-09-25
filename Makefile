@@ -5,8 +5,9 @@ clean:
 	- docker rmi $(docker images -a -q) -f 
 	- echo 'y' | docker container prune
 
-start:
-	docker compose up
+start_fdb:
+	docker compose up -d
+	./start.bash
 
 restart_app:
 	docker compose down
