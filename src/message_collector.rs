@@ -211,7 +211,7 @@ impl Actor for MessageCollectorWorker {
     }
 }
 
-pub type BatchRef<'a> = Box<TopicMessagesMap<'a>>;
+pub type BatchRef<'worker_state> = Box<TopicMessagesMap<'worker_state>>;
 
 impl MessageCollectorWorker {
     async fn upload_and_commit<T: AsRef<[Message]>>(&self, batch: T) -> anyhow::Result<()> {

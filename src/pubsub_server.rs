@@ -5,18 +5,17 @@ mod pubsub {
     tonic::include_proto!("pubsub");
 }
 
-use std::any;
 use std::sync::Arc;
 
 use bytes::Bytes;
 use object_store::path::Path;
 use ractor::rpc::CallResult;
 use tokio::io::AsyncWriteExt;
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{Request, Response, Status};
 
-use pubsub::pub_sub_server::{PubSub, PubSubServer};
+use pubsub::pub_sub_server::PubSub;
 use pubsub::{PublishRequest, PublishResponse};
-use tracing::info;
+
 
 use dotenv;
 
@@ -98,39 +97,20 @@ async fn test_object_store() -> anyhow::Result<()> {
         .with_allow_http(true) // Note: should not use this in production but is needed for local minio
         .build()?;
 
-        let object_store: Arc<dyn ObjectStore> = Arc::new(s3);
-        let path: Path = "data3/large_file".try_into().unwrap();
-
-        // create a string of 255 mb
-        let start = std::time::Instant::now();
-        let bytes = vec![0; 5 * 1024 * 1024];
-        let bytes = Bytes::from(bytes);
-        println!("time taken to create buffer: {:?} ms", start.elapsed().as_millis());
-
-        let start = std::time::Instant::now();
-        let (_id, mut writer) =  object_store
-            .put_multipart(&path)
-            .await
-            .expect("could not create multipart upload");
+    let bytes = vec![0; 20 * 1024 * 1024];
 
 
-        writer.write_all(&bytes).await.unwrap();
-        writer.flush().await.unwrap();
-        writer.shutdown().await.unwrap();
+    let object_store: Arc<dyn ObjectStore> = Arc::new(s3);
+    let path: Path = "large_file".try_into().unwrap();
+    let (_id, mut writer) =  object_store
+        .put_multipart(&path)
+        .await
+        .expect("could not create multipart upload");
 
-        println!("time taken: {:?} ms", start.elapsed().as_millis());
 
-    // let object_store: Arc<dyn ObjectStore> = Arc::new(s3);
-    // let path: Path = "large_file".try_into().unwrap();
-    // let (_id, mut writer) =  object_store
-    //     .put_multipart(&path)
-    //     .await
-    //     .expect("could not create multipart upload");
-    // let bytes = Bytes::from_static(b"hello");
-
-    // writer.write_all(&bytes).await.unwrap();
-    // writer.flush().await.unwrap();
-    // writer.shutdown().await.unwrap();
+    writer.write_all(&bytes).await.unwrap();
+    writer.flush().await.unwrap();
+    writer.shutdown().await.unwrap();
 
     Ok(())
 }
