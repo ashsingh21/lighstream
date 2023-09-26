@@ -1,3 +1,5 @@
+use std::f32::consts::E;
+
 use byteorder::ByteOrder;
 use bytes::Bytes;
 use multimap::MultiMap;
@@ -104,7 +106,7 @@ impl Actor for MessageCollectorWorker {
     ) -> Result<Self::State, ActorProcessingErr> {
         let wid = startup_context.wid.clone();
         myself.send_interval(
-            ractor::concurrency::tokio_primatives::Duration::from_millis(10),
+            ractor::concurrency::tokio_primatives::Duration::from_millis(100),
             move || {
                 // TODO: make sure this gets uniformly distributed to all workers
                 WorkerMessage::Dispatch(Job {
@@ -232,7 +234,7 @@ impl MessageCollectorWorker {
                             .await?;
                     }
                     Err(e) => {
-                        info!("error in uploading to s3: {}", e);
+                        panic!("error in uploading to s3: {}", e);
                     }
                 }
 

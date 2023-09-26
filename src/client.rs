@@ -55,7 +55,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut client = client.clone();
         task_set.spawn( async move {
-            let _response = client.publish(request).await.expect("rpc failed");
+            let _response = client.publish(request).await;
         });
        
         n += 1;
