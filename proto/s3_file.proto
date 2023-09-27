@@ -9,8 +9,9 @@ message FileMetadata {
 message TopicMetadata {
     string name = 1;
     uint64 watermark_start_offset = 2;
-    uint64 file_offset_data = 3;
-    uint32 num_messages = 4;
+    uint64 file_offset_start = 3;
+    uint64 file_offset_end = 4;
+    uint32 num_messages = 5;
 }
 
 message TopicData {

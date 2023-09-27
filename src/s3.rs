@@ -41,7 +41,7 @@ async fn test_open_dal() -> anyhow::Result<()> {
         .layer(LoggingLayer::default())
         .finish();
 
-    let s3_file = create_s3_file_bytes();
+    let s3_file = create_s3_file_bytes(10, 1_000_000);
 
     // let bytes = s3_file.write_to_bytes();
     let file = "topic_data_batch";
@@ -74,8 +74,8 @@ async fn test_open_dal() -> anyhow::Result<()> {
     let u32_bytes = &bytes[0..4];
     let file_metadata_len = u32::from_le_bytes(u32_bytes.try_into().unwrap());
 
-    println!("range read took: {:?}", start.elapsed());
-    println!("meta data len: {:?}", file_metadata_len);
+    println!("last 6 bytes read took: {:?}", start.elapsed());
+    println!("metadata len: {:?}", file_metadata_len);
 
 
     let start = tokio::time::Instant::now();
@@ -83,7 +83,7 @@ async fn test_open_dal() -> anyhow::Result<()> {
         start: metadata_start_offset - file_metadata_len as u64,
         end: metadata_start_offset,
     };
-    println!("range: {:?}", range);
+
     let reader = op.reader_with(file).range(range).await?;
     let bytes = reader.map(|result| {
         let chunk = result.expect("failed to read chunk");
@@ -91,10 +91,32 @@ async fn test_open_dal() -> anyhow::Result<()> {
     }).collect::<Vec<_>>().await.into_iter().flatten().collect::<Vec<_>>();
  
     let metadata = FileMetadata::decode(&bytes[..]).unwrap();
-    println!("took to fetch and decode: {:?}", start.elapsed());
-    for meta in metadata.topics_metadata {
-        println!("got metadata: {:?}", meta);
-    }
+    println!("took to fetch and decode file metadata: {:?}", start.elapsed());
+
+    // read topic data
+    let start = tokio::time::Instant::now();
+    let topic_to_find = "topic_1";
+    let topic_metadata = metadata.topics_metadata.iter().find(|meta| meta.name == topic_to_find).expect("topic not found");
+
+    let range = std::ops::Range {
+        start: topic_metadata.file_offset_start,
+        end: topic_metadata.file_offset_end,
+    };
+
+    let reader = op.reader_with(file).range(range).await?;
+    let bytes = reader.map(|result| {
+        let chunk = result.expect("failed to read chunk");
+        chunk
+    }).collect::<Vec<_>>().await.into_iter().flatten().collect::<Vec<_>>();
+
+    let topic_data = TopicData::decode(&bytes[..]).unwrap();
+
+    println!("took to fetch and decode topic data: {:?}", start.elapsed());
+
+    // for messgae in topic_data.messages {
+    //     println!("message: {:?}", messgae);
+    // }
+
     // // Delete
     // op.delete("hello.txt").await?;
 
@@ -150,9 +172,7 @@ async fn test_object_store() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn create_s3_file_bytes() -> Bytes {
-    let n_topics = 4;
-    let n_messages = 3;
+fn create_s3_file_bytes(n_topics: usize, n_messages: usize) -> Bytes {
 
     let mut file_buffer = BytesMut::new();
 
@@ -161,14 +181,18 @@ fn create_s3_file_bytes() -> Bytes {
     for i in 0..n_topics {
         let topic_name = format!("topic_{}", i);
         let topic_data = create_topic_data( 0, n_messages, topic_name.as_str());
-        file_buffer.put(Bytes::from(topic_data.encode_to_vec()));
+        let topic_data_buffer = Bytes::from(topic_data.encode_to_vec());
 
         let topic_metadata = TopicMetadata {
             name: topic_name,
             watermark_start_offset: 0,
-            file_offset_data: file_buffer.len() as u64,
+            file_offset_start: file_buffer.len() as u64,
+            file_offset_end: file_buffer.len() as u64 +  topic_data_buffer.len() as u64,
+
             num_messages: n_messages as u32,
         };
+
+        file_buffer.put(topic_data_buffer);
         topics_metadata.push(topic_metadata);
     }
 
