@@ -1,0 +1,26 @@
+syntax = "proto3";
+package s3_file;
+
+
+message FileMetadata {
+    repeated TopicMetadata topics_metadata = 1;
+}
+
+message TopicMetadata {
+    string name = 1;
+    uint64 watermark_start_offset = 2;
+    uint64 file_offset_data = 3;
+    uint32 num_messages = 4;
+}
+
+message TopicData {
+    repeated TopicMessage messages = 1;
+}
+
+message TopicMessage {
+    uint64 offset = 1;
+    uint64 timestamp = 2;
+    bytes key = 3;
+    bytes value = 4;
+}
+
