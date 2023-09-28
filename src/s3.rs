@@ -2,7 +2,7 @@ mod s3_file {
     tonic::include_proto!("s3_file");
 }
 
-use bytes::{BytesMut, BufMut, Bytes};
+use bytes::{BytesMut, BufMut, Bytes, Buf};
 
 use futures::StreamExt;
 use prost::Message;
@@ -11,7 +11,7 @@ use tonic::metadata;
 use tracing::info;
 use tracing_subscriber::fmt::format;
 
-use std::{sync::Arc, io::{Write, Read}, collections::HashMap};
+use std::{sync::Arc, io::{Write, Read}, collections::HashMap, any, time::UNIX_EPOCH};
 
 use object_store::{ObjectStore, path::Path, aws::AmazonS3Builder};
 use tokio::io::AsyncWriteExt;
@@ -49,7 +49,7 @@ async fn test_open_dal() -> anyhow::Result<()> {
 
     let file = "topic_data_batch";
 
-    let mut s3_file = S3File::new();
+    let mut s3_file = S3File::new(op.clone());
 
     for _ in 0..10 {
         s3_file.insert("topic_0", TopicMessage {
@@ -60,9 +60,7 @@ async fn test_open_dal() -> anyhow::Result<()> {
         });
     }
 
-    let s3_file_bytes = Bytes::from(s3_file.to_bytes());
-
-    op.clone().write(file, s3_file_bytes).await?;
+    s3_file.upload_and_clear().await?;
 
     let start = tokio::time::Instant::now();
     let s3_file_reader = S3FileReader::try_new(file.to_string(), op.clone()).await?;
@@ -270,15 +268,23 @@ fn create_topic_data(watermark_start_offset: u64, n_messages: usize, topic_name:
 
 struct S3File {
     topic_data: HashMap<String, TopicData>,
+    file_buffer: BytesMut,
+    topic_data_buffer: BytesMut,
+    compression_buffer: Vec<u8>,
+    op: Arc<Operator>,
 }
 
 impl S3File {
 
     /// File format:
     /// FileMetaData + metadata len  4 bytes (u32) + MAGIC_BYTES
-    fn new() -> Self {
+    fn new(op: Arc<Operator>) -> Self {
         Self {
             topic_data: HashMap::new(),
+            file_buffer: BytesMut::new(),
+            topic_data_buffer: BytesMut::new(),
+            compression_buffer: Vec::new(),
+            op
         }
     }
 
@@ -293,42 +299,56 @@ impl S3File {
         }
     }
 
-    fn to_bytes(self) -> Vec<u8> {
-        let mut file_buffer = BytesMut::new();
-        let mut topic_data_buffer = BytesMut::new();
+    async fn upload_and_clear(&mut self) -> anyhow::Result<()> {
+        self.bytes();
+        
+        // create unique filename 
+        let current_time = std::time::SystemTime::now();
+        let filename = format!("topic_data_batch_{}", current_time.duration_since(UNIX_EPOCH).expect("time went backwards").as_nanos());
+
+        let path = format!("topics_data/{}", filename);
+
+        // FIXME: can we avoid a clone here?
+        self.op.write(&path, self.file_buffer.to_vec()).await?;
+        self.clear();
+        Ok(())
+    }
+
+    fn clear(&mut self) {
+        self.topic_data.clear();
+        self.file_buffer.clear();
+        self.topic_data_buffer.clear();
+        self.compression_buffer.clear();
+
+    }
+
+    fn bytes(&mut self) {
         let mut topics_metadata = Vec::new();
 
-        let mut compression_buffer = Vec::new();
-
-        for (topic_name, topic_data) in self.topic_data {
-            let mut gz = GzEncoder::new(&mut compression_buffer, flate2::Compression::default());
-            topic_data.encode(&mut topic_data_buffer).expect("failed to encode topic data");
-            gz.write_all(&topic_data_buffer).expect("failed to write to gz");
-            let compressed = gz.finish().expect("failed to flush gz");
+        for (topic_name, topic_data) in self.topic_data.iter() {
+            topic_data.encode(&mut self.topic_data_buffer).expect("failed to encode topic data");
+            let mut gzip = flate2::write::GzEncoder::new(&mut self.compression_buffer, flate2::Compression::default());
+            gzip.write_all(&self.topic_data_buffer).expect("failed to write to gz");
+            let compressed = gzip.finish().expect("failed to flush gz");
 
             let topic_metadata = TopicMetadata {
-                name: topic_name,
+                name: topic_name.clone(),
                 watermark_start_offset: 0, // FIXME: this should be set to accurate start watermaark 
-                file_offset_start: file_buffer.len() as u64,
-                file_offset_end: file_buffer.len() as u64 +  compressed.len() as u64,
+                file_offset_start: self.file_buffer.len() as u64,
+                file_offset_end: self.file_buffer.len() as u64 +  compressed.len() as u64,
                 num_messages: topic_data.messages.len() as u32,
             };
 
-            file_buffer.put(&compressed[..]);
+            self.file_buffer.put(&compressed[..]);
             topics_metadata.push(topic_metadata);
-
-            topic_data_buffer.clear();
-            compression_buffer.clear();
         }
 
         let file_metadata = FileMetadata { topics_metadata }.encode_to_vec();
         let file_metadata_len = file_metadata.len() as u32;
 
-        file_buffer.put(&file_metadata[..]);
-        file_buffer.put_u32_le(file_metadata_len);
-        file_buffer.put(MAGIC_BYTES);
-
-        file_buffer.into()
+        self.file_buffer.put(&file_metadata[..]);
+        self.file_buffer.put_u32_le(file_metadata_len);
+        self.file_buffer.put(MAGIC_BYTES);
     }
 }
 

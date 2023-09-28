@@ -2,6 +2,7 @@ mod agent;
 mod message_collector;
 mod metadata;
 mod producer;
+mod s3;
 
 use std::{sync::Arc, thread, time::Duration};
 
