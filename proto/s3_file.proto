@@ -15,7 +15,8 @@ message TopicMetadata {
 }
 
 message TopicData {
-    repeated TopicMessage messages = 1;
+    string topic_name = 1;
+    repeated TopicMessage messages = 2;
 }
 
 message TopicMessage {

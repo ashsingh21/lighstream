@@ -27,6 +27,8 @@ tower = "0.4.13"
 dotenv = "0.15.0"
 object_store = { version = "0.7.0", features = ["aws"] }
 opendal = "0.40.0"
+human_bytes = "0.4.3"
+flate2 = "1.0.27"
 
 [[bin]] # Bin to run the HelloWorld gRPC server
 name = "lightstream"
