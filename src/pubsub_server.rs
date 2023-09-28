@@ -1,16 +1,13 @@
 mod agent;
 mod message_collector;
 mod metadata;
+mod s3;
 mod pubsub {
     tonic::include_proto!("pubsub");
 }
 
-use std::sync::Arc;
-
 use bytes::Bytes;
-use object_store::path::Path;
 use ractor::rpc::CallResult;
-use tokio::io::AsyncWriteExt;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
@@ -20,16 +17,13 @@ use pubsub::{PublishRequest, PublishResponse};
 
 use dotenv;
 
-use object_store::ObjectStore;
 use tracing::info;
 use crate::agent::{Agent, Command};
 use crate::pubsub::pub_sub_server::PubSubServer;
-use object_store::aws::AmazonS3Builder;
 
 #[tonic::async_trait]
 impl PubSub for Agent {
     async fn publish(&self, request: Request<PublishRequest>) -> Result<Response<PublishResponse>, Status> {
-        println!("Got a request: {:?}", request);
         let request = request.into_inner();
 
         match self.send(Command::Send {
@@ -67,11 +61,11 @@ async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
 
     // construct a subscriber that prints formatted traces to stdout
-    let subscriber = tracing_subscriber::FmtSubscriber::builder()
-    .with_max_level(tracing::Level::INFO)
-        .finish();
-    // use that subscriber to process traces emitted after this point
-    tracing::subscriber::set_global_default(subscriber)?;
+    // let subscriber = tracing_subscriber::FmtSubscriber::builder()
+    // .with_max_level(tracing::Level::INFO)
+    //     .finish();
+    // // use that subscriber to process traces emitted after this point
+    // tracing::subscriber::set_global_default(subscriber)?;
 
     info!("starting up pub sub server");
 

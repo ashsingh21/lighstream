@@ -2,19 +2,14 @@ mod s3_file {
     tonic::include_proto!("s3_file");
 }
 
-use bytes::{BytesMut, BufMut, Bytes, Buf};
+use bytes::{BytesMut, BufMut, Bytes};
 
 use futures::StreamExt;
 use prost::Message;
 use s3_file::{FileMetadata, TopicMetadata, TopicData, TopicMessage};
-use tonic::metadata;
-use tracing::info;
-use tracing_subscriber::fmt::format;
 
-use std::{sync::Arc, io::{Write, Read}, collections::HashMap, any, time::UNIX_EPOCH};
 
-use object_store::{ObjectStore, path::Path, aws::AmazonS3Builder};
-use tokio::io::AsyncWriteExt;
+use std::{sync::Arc, io::{Write, Read}, collections::HashMap, time::UNIX_EPOCH};
 
 use opendal::{services, Operator, layers::LoggingLayer};
 
@@ -22,16 +17,19 @@ use human_bytes::human_bytes;
 
 use flate2::write::GzEncoder;
 
+use crate::message_collector;
+
+
 
 const MAGIC_BYTES: &[u8] = b"12";
 
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    dotenv::dotenv().ok();
-    test_open_dal().await?;
-    Ok(())
-}
+// #[tokio::main]
+// async fn main() -> anyhow::Result<()> {
+//     dotenv::dotenv().ok();
+//     test_open_dal().await?;
+//     Ok(())
+// }
 
 async fn test_open_dal() -> anyhow::Result<()> {
     let mut builder = services::S3::default();
@@ -45,20 +43,9 @@ async fn test_open_dal() -> anyhow::Result<()> {
         .layer(LoggingLayer::default())
         .finish());
 
-    // let s3_file = create_s3_file_bytes(10, 2);
-
     let file = "topic_data_batch";
 
     let mut s3_file = S3File::new(op.clone());
-
-    for _ in 0..10 {
-        s3_file.insert("topic_0", TopicMessage {
-            offset: 0,
-            timestamp: 0,
-            key: "topic_0".as_bytes().to_vec(),
-            value: vec![234_u8; 1024 * 1024],
-        });
-    }
 
     s3_file.upload_and_clear().await?;
 
@@ -67,145 +54,10 @@ async fn test_open_dal() -> anyhow::Result<()> {
     let topic_data = s3_file_reader.get_topic_data("topic_0").await?;
 
     println!("took to fetch and decode topic data: {:?}", start.elapsed());
-    // println!("topic data len: {}", topic_data.messages.len());
-    // for message in topic_data.messages {
-    //     println!("message: {:?}", message);
-    // }
-
-    // // Write
-    // let start = tokio::time::Instant::now();
-    // op.write(file, Bytes::from(s3_file)).await?;
-    // println!("write took: {:?}", start.elapsed());
-
-    // // Fetch metadata
-    // let meta = op.stat(file).await?;
-    // let mode = meta.mode();
-    // let eof = meta.content_length();
-
-    // println!("mode: {:?}, length: {}", mode, human_bytes(eof as f64));
-
-    // let metadata_start_offset = eof - (4 + MAGIC_BYTES.len()) as u64;
-
-    // let range = std::ops::Range {
-    //     start: metadata_start_offset,
-    //     end: eof,
-    // };
-
-    // let start = tokio::time::Instant::now();
-    // let reader = op.reader_with(file).range(range).await?;
-    // let bytes = reader.map(|result| {
-    //     let chunk = result.expect("failed to read chunk");
-    //     chunk
-    // }).collect::<Vec<_>>().await.into_iter().flatten().collect::<Vec<_>>();
-    // let u32_bytes = &bytes[0..4];
-    // let file_metadata_len = u32::from_le_bytes(u32_bytes.try_into().unwrap());
-
-    // println!("last 6 bytes read took: {:?}", start.elapsed());
-    // println!("metadata len: {}", file_metadata_len);
-
-
-    // let start = tokio::time::Instant::now();
-    // let range = std::ops::Range {
-    //     start: metadata_start_offset - file_metadata_len as u64,
-    //     end: metadata_start_offset,
-    // };
-
-    // let reader = op.reader_with(file).range(range).await?;
-    // let bytes = reader.map(|result| {
-    //     let chunk = result.expect("failed to read chunk");
-    //     chunk
-    // }).collect::<Vec<_>>().await.into_iter().flatten().collect::<Vec<_>>();
- 
-    // let metadata = FileMetadata::decode(&bytes[..]).unwrap();
-    // println!("took to fetch and decode file metadata: {:?}", start.elapsed());
-
-    // // read topic data
-    // let start = tokio::time::Instant::now();
-    // let topic_to_find = "topic_0";
-    // let topic_metadata = metadata.topics_metadata.iter().find(|meta| meta.name == topic_to_find).expect("topic not found");
-
-    // let range = std::ops::Range {
-    //     start: topic_metadata.file_offset_start,
-    //     end: topic_metadata.file_offset_end,
-    // };
-
-    // let reader = op.reader_with(file).range(range).await?;
-    // let bytes = reader.map(|result| {
-    //     let chunk = result.expect("failed to read chunk");
-    //     chunk
-    // }).collect::<Vec<_>>().await.into_iter().flatten().collect::<Vec<_>>();
-
-    // println!("topic data len: {}", human_bytes(bytes.len() as f64));
-
-    // let mut bytes = flate2::read::GzDecoder::new(&bytes[..]);
-
-    // let mut out_buffer = Vec::new();
-    // bytes.read_to_end(&mut out_buffer).expect("failed to read gz");
-
-    // println!("out buffer len: {}", human_bytes(out_buffer.len() as f64));
-
-    // let topic_data = TopicData::decode(&out_buffer[..]).unwrap();
-
-    // println!("took to fetch and decode topic data: {:?}", start.elapsed());
-    // println!("topic data len: {}", topic_data.messages.len());
-    // for messgae in topic_data.messages {
-    //     println!("message: {:?}", String::from_utf8_lossy(&messgae.key));
-    // }
-
-    // // Delete
-    // op.delete("hello.txt").await?;
 
     Ok(())
 }
 
-async fn test_object_store() -> anyhow::Result<()> {
-    let s3 = AmazonS3Builder::new()
-        .with_access_key_id(std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID not set"))
-        .with_secret_access_key(std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"))
-        .with_bucket_name("lightstream")
-        .with_region("us-east-1")
-        .with_endpoint("http://localhost:9000")
-        .with_allow_http(true) // Note: should not use this in production but is needed for local minio
-        .build()?;
-
-    let object_store: Arc<dyn ObjectStore> = Arc::new(s3);
-
-
-    // let bytes = s3_file.write_to_bytes();
-    // let bytes = Bytes::from(bytes);
-
-    // let path: Path = "topic_data_batch".try_into().unwrap();
-    // object_store.put(&path, bytes).await?;
-
-    // let (_id, mut writer) =  object_store
-    //     .put_multipart(&path)
-    //     .await
-    //     .expect("could not create multipart upload");
-
-    // writer.write_all(&bytes).await.unwrap();
-    // writer.flush().await.unwrap();
-    // writer.shutdown().await.unwrap();
-    info!("wrote to s3");
-    let start = tokio::time::Instant::now();
-    // let list_stream = object_store.list(Some(&path)).await?;
-
-    let range = std::ops::Range {
-        start: 0,
-        end: 100,
-    };
-
-    // list_stream.for_each(move |meta| {
-    //     println!("got metadata: {:?}", meta);
-    //     async {
-    //         let meta = meta.expect("could not get metadata");
-    //         println!("got metadata: {:?}", meta);
-    //     }
-    // }).await;
-
-    println!("list took: {:?}", start.elapsed());
-
-    Ok(())
-}
 
 fn create_s3_file_bytes(n_topics: usize, n_messages: usize) -> Bytes {
 
@@ -266,8 +118,8 @@ fn create_topic_data(watermark_start_offset: u64, n_messages: usize, topic_name:
     topics_data
 }
 
-struct S3File {
-    topic_data: HashMap<String, TopicData>,
+pub struct S3File {
+    pub topic_data: HashMap<String, TopicData>,
     file_buffer: BytesMut,
     topic_data_buffer: BytesMut,
     compression_buffer: Vec<u8>,
@@ -278,7 +130,7 @@ impl S3File {
 
     /// File format:
     /// FileMetaData + metadata len  4 bytes (u32) + MAGIC_BYTES
-    fn new(op: Arc<Operator>) -> Self {
+    pub fn new(op: Arc<Operator>) -> Self {
         Self {
             topic_data: HashMap::new(),
             file_buffer: BytesMut::new(),
@@ -289,17 +141,32 @@ impl S3File {
     }
 
     /// User's responsibility to ensure that topic_data and topic_metadata are for same topic
-    fn insert(&mut self, topic_name: &str, message: TopicMessage) {
+    pub fn insert(&mut self, topic_name: &str, message: message_collector::Message) {
         // FIXME: what happens if same topic is added twice?
+
+        let timestamp = std::time::SystemTime::now().duration_since(UNIX_EPOCH).expect("time went backwards").as_millis() as u64;
+
         if let Some(topic_data) = self.topic_data.get_mut(topic_name) {
-            topic_data.messages.push(message);
+            let topic_message = TopicMessage {
+                offset: topic_data.messages.len() as u64,
+                timestamp,
+                key: topic_name.as_bytes().to_vec(), // FIXME: use actual key
+                value: message.data.to_vec(), // FIXME: avoid clone
+            };
+            topic_data.messages.push(topic_message);
         } else {
-            let topic_data = TopicData { topic_name: topic_name.to_string(), messages: vec![message] };
+            let topic_message = TopicMessage {
+                offset: 0,
+                timestamp,
+                key: topic_name.as_bytes().to_vec(), // FIXME: use actual key
+                value: message.data.to_vec(), // FIXME: avoid clone
+            };
+            let topic_data = TopicData { topic_name: topic_name.to_string(), messages: vec![topic_message] };
             self.topic_data.insert(topic_name.to_string(), topic_data);
         }
     }
 
-    async fn upload_and_clear(&mut self) -> anyhow::Result<()> {
+    pub async fn upload_and_clear(&mut self) -> anyhow::Result<()> {
         self.bytes();
         
         // create unique filename 
@@ -311,6 +178,7 @@ impl S3File {
         // FIXME: can we avoid a clone here?
         self.op.write(&path, self.file_buffer.to_vec()).await?;
         self.clear();
+
         Ok(())
     }
 
@@ -319,7 +187,6 @@ impl S3File {
         self.file_buffer.clear();
         self.topic_data_buffer.clear();
         self.compression_buffer.clear();
-
     }
 
     fn bytes(&mut self) {
@@ -341,6 +208,9 @@ impl S3File {
 
             self.file_buffer.put(&compressed[..]);
             topics_metadata.push(topic_metadata);
+
+            self.topic_data_buffer.clear();
+            self.compression_buffer.clear();
         }
 
         let file_metadata = FileMetadata { topics_metadata }.encode_to_vec();
@@ -353,10 +223,10 @@ impl S3File {
 }
 
 
-struct S3FileReader {
+pub struct S3FileReader {
     path: String,
     s3_operator: Arc<Operator>,
-    file_metadata: FileMetadata,
+    pub file_metadata: FileMetadata,
 }
 
 impl S3FileReader {
@@ -392,6 +262,8 @@ impl S3FileReader {
             end: topic_metadata.file_offset_end,
         };
 
+        println!("range: {:?}", range);
+
         let start = tokio::time::Instant::now();
         let compressed_bytes = Self::get_bytes_for_range(&self.path, self.s3_operator.clone(), range).await?;
 
@@ -408,7 +280,6 @@ impl S3FileReader {
 
         Ok(topic_data)
     }
-
 
 
     // FIX ME: maybe provide buffer to reuse?

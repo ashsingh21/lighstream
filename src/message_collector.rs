@@ -1,8 +1,9 @@
-use std::f32::consts::E;
+use std::sync::Arc;
 
 use byteorder::ByteOrder;
 use bytes::Bytes;
 use multimap::MultiMap;
+use opendal::{Operator, services, layers::LoggingLayer};
 use ractor::{
     concurrency::JoinHandle,
     factory::{FactoryMessage, Job, JobOptions, WorkerBuilder, WorkerMessage, WorkerStartContext, DiscardHandler},
@@ -17,6 +18,8 @@ use foundationdb::{
     FdbError, Transaction, FdbBindingError,
 };
 
+use crate::s3;
+
 // Reference https://github.com/slawlor/ractor/blob/000fbb63e7c5cb9fa522535565d1d74c48df7f8e/ractor/src/factory/tests/mod.rs#L156
 
 const FOUNDATION_DB_TRASACTION_LIMIT: usize = 5_000_000; // 5 MB, original 10MB
@@ -24,9 +27,11 @@ const FOUNDATION_DB_KEY_TRASACTION_LIMIT: usize = 50_000; // 5 kb defual origina
 
 pub type TopicName = String;
 pub type MessageData = Bytes;
+
+#[derive(Debug, Clone)]
 pub struct Message {
-    topic_name: TopicName, 
-    data: MessageData,
+    pub topic_name: TopicName, 
+    pub data: MessageData,
 }
 
 impl Message {
@@ -50,15 +55,17 @@ struct MessageState {
     keys_size: usize,
     total_bytes: usize,
     reply_ports: Vec<RpcReplyPort<ErrorCode>>,
+    s3_file: s3::S3File,
 }
 
 impl MessageState {
-    fn new() -> Self {
+    fn new(operator: Arc<Operator>) -> Self {
         Self {
             messages: Vec::with_capacity(10_000),
             total_bytes: 0,
             keys_size: 0,
             reply_ports: Vec::with_capacity(500),
+            s3_file: s3::S3File::new(operator),
         }
     }
 
@@ -106,7 +113,7 @@ impl Actor for MessageCollectorWorker {
     ) -> Result<Self::State, ActorProcessingErr> {
         let wid = startup_context.wid.clone();
         myself.send_interval(
-            ractor::concurrency::tokio_primatives::Duration::from_millis(100),
+            ractor::concurrency::tokio_primatives::Duration::from_millis(1500),
             move || {
                 // TODO: make sure this gets uniformly distributed to all workers
                 WorkerMessage::Dispatch(Job {
@@ -117,8 +124,19 @@ impl Actor for MessageCollectorWorker {
             },
         );
 
+        let mut builder = services::S3::default();
+        builder.access_key_id(&std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID not set"));
+        builder.secret_access_key(&std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"));
+        builder.bucket("lightstream");
+        builder.endpoint("http://localhost:9000");
+        builder.region("us-east-1");
+    
+        let op = Arc::new(Operator::new(builder)?
+            .layer(LoggingLayer::default())
+            .finish());
+
         Ok(MessageCollectorState {
-            message_state: MessageState::new(),
+            message_state: MessageState::new(op.clone()),
             worker_state: startup_context,
         })
     }
@@ -151,6 +169,11 @@ impl Actor for MessageCollectorWorker {
 
                         if state.message_state.will_exceed_foundation_db_transaction_limit(&message) {
                             info!("exceeded foundation db transaction limit");
+
+                            let start = tokio::time::Instant::now();
+                            state.message_state.s3_file.upload_and_clear().await.expect("could not upload to s3 file from file foremat");
+                            println!("upload to s3 took: {}ms", start.elapsed().as_millis());
+
                             match self.upload_and_commit(&state.message_state.messages).await {
                                 Ok(_) => {
                                     info!("uploaded and committed");
@@ -166,6 +189,9 @@ impl Actor for MessageCollectorWorker {
                                 }
                             });
                         }
+
+                        state.message_state.s3_file.insert(&message.topic_name, message.clone());
+
                         state.message_state.push(message);
                         state.message_state.reply_ports.push(reply_port);
                     }
@@ -177,6 +203,11 @@ impl Actor for MessageCollectorWorker {
                         );
 
                         if state.message_state.messages.len() > 0 {
+
+                            let start = tokio::time::Instant::now();
+                            state.message_state.s3_file.upload_and_clear().await.expect("could not upload to s3 file from file foremat");
+                            println!("upload to s3 took: {}ms", start.elapsed().as_millis());
+
                             match self.upload_and_commit(&state.message_state.messages).await {
                                     Ok(_) => {
                                         info!("uploaded and committed");
@@ -275,7 +306,6 @@ impl MessageCollectorWorker {
         _batch: &'worker_state TopicMessagesMap<'worker_state>,
     ) -> anyhow::Result<String> {
         info!("batch uploaded to s3...");
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         Ok("filename".to_string())
     }
 
