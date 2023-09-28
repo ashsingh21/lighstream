@@ -262,8 +262,6 @@ impl S3FileReader {
             end: topic_metadata.file_offset_end,
         };
 
-        println!("range: {:?}", range);
-
         let start = tokio::time::Instant::now();
         let compressed_bytes = Self::get_bytes_for_range(&self.path, self.s3_operator.clone(), range).await?;
 
