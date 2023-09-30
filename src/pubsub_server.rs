@@ -61,11 +61,12 @@ async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
 
     // construct a subscriber that prints formatted traces to stdout
-    // let subscriber = tracing_subscriber::FmtSubscriber::builder()
-    // .with_max_level(tracing::Level::INFO)
-    //     .finish();
-    // // use that subscriber to process traces emitted after this point
-    // tracing::subscriber::set_global_default(subscriber)?;
+    let subscriber = tracing_subscriber::FmtSubscriber::builder()
+    .with_max_level(tracing::Level::INFO)
+        .finish();
+    
+    // use that subscriber to process traces emitted after this point
+    tracing::subscriber::set_global_default(subscriber)?;
 
     info!("starting up pub sub server");
 

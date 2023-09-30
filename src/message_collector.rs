@@ -11,7 +11,7 @@ use ractor::{
 };
 use tracing::{debug, info};
 
-use crate::metadata::{self, TopicMetadata};
+use crate::{metadata::{self, TopicMetadata}, s3::{BatchStatistic, BatchStatistics}};
 use foundationdb::{
     options::{self, TransactionOption},
     tuple::Subspace,
@@ -51,7 +51,6 @@ pub enum MessageCollectorWorkerOperation {
 }
 
 struct MessageState {
-    messages: Vec<Message>,
     keys_size: usize,
     total_bytes: usize,
     reply_ports: Vec<RpcReplyPort<ErrorCode>>,
@@ -61,7 +60,6 @@ struct MessageState {
 impl MessageState {
     fn new(operator: Arc<Operator>) -> Self {
         Self {
-            messages: Vec::with_capacity(10_000),
             total_bytes: 0,
             keys_size: 0,
             reply_ports: Vec::with_capacity(500),
@@ -72,12 +70,10 @@ impl MessageState {
     fn push(&mut self, message: Message) {
         self.keys_size += message.data.len();
         self.total_bytes += message.data.len() + message.topic_name.len();
-        self.messages.push(message);
     }
 
     /// clears both messages and total_bytes
     fn clear(&mut self) {
-        self.messages.clear();
         self.total_bytes = 0;
         self.keys_size = 0;
     }
@@ -113,7 +109,7 @@ impl Actor for MessageCollectorWorker {
     ) -> Result<Self::State, ActorProcessingErr> {
         let wid = startup_context.wid.clone();
         myself.send_interval(
-            ractor::concurrency::tokio_primatives::Duration::from_millis(1500),
+            ractor::concurrency::tokio_primatives::Duration::from_millis(5000),
             move || {
                 // TODO: make sure this gets uniformly distributed to all workers
                 WorkerMessage::Dispatch(Job {
@@ -162,26 +158,25 @@ impl Actor for MessageCollectorWorker {
                 match job.msg {
                     MessageCollectorWorkerOperation::Collect( message , reply_port) => {
                         debug!(
-                            "worker {} got collect, len: {}",
-                            state.worker_state.wid,
-                            state.message_state.messages.len()
+                            "worker {} got collect",
+                            state.worker_state.wid
                         );
 
                         if state.message_state.will_exceed_foundation_db_transaction_limit(&message) {
                             info!("exceeded foundation db transaction limit");
 
                             let start = tokio::time::Instant::now();
-                            state.message_state.s3_file.upload_and_clear().await.expect("could not upload to s3 file from file foremat");
-                            println!("upload to s3 took: {}ms", start.elapsed().as_millis());
-
-                            match self.upload_and_commit(&state.message_state.messages).await {
-                                Ok(_) => {
-                                    info!("uploaded and committed");
+                            match state.message_state.s3_file.upload_and_clear().await {
+                                Ok((path, batch_statistic)) => {
+                                    self.commit(&path, batch_statistic).await.expect("could not commit batch");
+                                    info!("upload to s3 took: {}ms", start.elapsed().as_millis());
                                 }
                                 Err(e) => {
-                                    info!("error in uploading and committing: {}, batch len: {}", e, state.message_state.messages.len());
+                                    info!("error in uploading to s3: {}", e);
                                 }
                             }
+                            info!("upload to s3 took: {}ms", start.elapsed().as_millis());
+
                             state.message_state.clear();
                             state.message_state.reply_ports.drain(..).for_each(|reply_port|{
                                 if reply_port.send(0).is_err() {
@@ -190,34 +185,28 @@ impl Actor for MessageCollectorWorker {
                             });
                         }
 
+                        state.message_state.push(message.clone()); // FIXME: needed for transaction limit, should move transaction limit check to s3 file?
                         state.message_state.s3_file.insert(&message.topic_name, message.clone());
-
-                        state.message_state.push(message);
                         state.message_state.reply_ports.push(reply_port);
                     }
                     MessageCollectorWorkerOperation::Flush => {
                         debug!(
-                            "worker {} got flush len: {}",
-                            state.worker_state.wid,
-                            state.message_state.messages.len()
+                            "worker {} got flush message",
+                            state.worker_state.wid
                         );
-
-                        if state.message_state.messages.len() > 0 {
-
+                        if state.message_state.s3_file.size() > 0 {
                             let start = tokio::time::Instant::now();
-                            state.message_state.s3_file.upload_and_clear().await.expect("could not upload to s3 file from file foremat");
-                            println!("upload to s3 took: {}ms", start.elapsed().as_millis());
-
-                            match self.upload_and_commit(&state.message_state.messages).await {
-                                    Ok(_) => {
-                                        info!("uploaded and committed");
-                                    }
-                                    Err(e) => {
-                                        info!("error in uploading and committing: {}, batch len: {}", e, state.message_state.messages.len());
-                                    }
+                            match state.message_state.s3_file.upload_and_clear().await {
+                                Ok((path, batch_statistic)) => {
+                                    self.commit(&path, batch_statistic).await.expect("could not commit batch");
+                                    info!("upload to s3 took: {}ms", start.elapsed().as_millis());
+                                }
+                                Err(e) => {
+                                    info!("error in uploading to s3: {}", e);
+                                }
                             }
 
-                            state.message_state.clear();
+                            state.message_state.clear(); // FIXME: needed for transaction limit, should move transaction limit check to s3 file?
                             info!("replying to listeners...");
                             state.message_state.reply_ports.drain(..).for_each(|reply_port|{
                                 if reply_port.send(0).is_err() {
@@ -245,29 +234,16 @@ impl Actor for MessageCollectorWorker {
 pub type BatchRef<'worker_state> = Box<TopicMessagesMap<'worker_state>>;
 
 impl MessageCollectorWorker {
-    async fn upload_and_commit<T: AsRef<[Message]>>(&self, batch: T) -> anyhow::Result<()> {
-        let batch = batch.as_ref();
+    async fn commit(&self, path: &str, batch: BatchStatistics) -> anyhow::Result<()> {
+        let batch_ref = &batch;
         // TODO: maybe trigger a cleanup?
         self.metadata_client
             .db
             .run(|trx, _maybe_committed| async move {
                 trx.set_option(TransactionOption::Timeout(10_000))?;
+                trx.set_option(TransactionOption::RetryLimit(10))?;
 
-                // create topic message map from batch
-                let mut topic_message_map = TopicMessagesMap::new();
-                for message in batch.iter() {
-                    topic_message_map.insert(&message.topic_name.as_str(), message);
-                }
-
-                match self.upload_to_s3(&topic_message_map).await {
-                    Ok(filename) => {
-                        self.commit(&trx, &filename, &topic_message_map)
-                            .await?;
-                    }
-                    Err(e) => {
-                        panic!("error in uploading to s3: {}", e);
-                    }
-                }
+                self._commit(&trx, path, batch_ref).await?;
 
                 Ok(())
             })
@@ -275,27 +251,41 @@ impl MessageCollectorWorker {
         Ok(())
     }
 
-    async fn commit<'worker_state>(
+    async fn _commit(
         &self,
         trx: &Transaction,
-        filename: &str,
-        batch: &'worker_state TopicMessagesMap<'worker_state>,
+        path: &str,
+        batch: &BatchStatistics
     ) -> anyhow::Result<(), FdbBindingError> {
         info!("committing batch of size {}", batch.len());
         let topic_metadata_subspace = Subspace::all().subspace(&"topic_metadata");
 
-        for (topic_name, messages) in batch.iter_all() {
-            let topic_name_subspace = topic_metadata_subspace.subspace(topic_name);
+        for data in batch {
+            let topic_name_subspace = topic_metadata_subspace.subspace(&data.topic_name);
+            let topic_offset_start_subspace = topic_name_subspace.subspace(&"offset_start");
 
             let topic_meta_data = self
-                .get_topic_metadata(&trx, &topic_name, &topic_name_subspace)
+                .get_topic_metadata(&trx, &data.topic_name, &topic_name_subspace)
                 .await?;
 
-            let offset_start_key = topic_name_subspace
-                .pack(&format!("offset_start_{}", topic_meta_data.high_watermark));
-            trx.set(&offset_start_key, filename.as_bytes());
-            self.increment_high_watermark(&trx, topic_name, messages.len() as i64);
+            let offset_start_key = topic_offset_start_subspace.pack(&topic_meta_data.high_watermark);
+            trx.set(&offset_start_key, path.as_bytes());
+            self.increment_high_watermark(&trx, &data.topic_name, data.num_messages as i64);
+
         }
+
+        // for (topic_name, messages) in batch.iter_all() {
+        //     let topic_name_subspace = topic_metadata_subspace.subspace(topic_name);
+
+        //     let topic_meta_data = self
+        //         .get_topic_metadata(&trx, &topic_name, &topic_name_subspace)
+        //         .await?;
+
+        //     let offset_start_key = topic_name_subspace
+        //         .pack(&format!("offset_start_{}", topic_meta_data.high_watermark));
+        //     trx.set(&offset_start_key, filename.as_bytes());
+        //     self.increment_high_watermark(&trx, topic_name, messages.len() as i64);
+        // }
 
         info!("committed batch of size {}", batch.len());
         Ok(())
@@ -325,8 +315,6 @@ impl MessageCollectorWorker {
         let high_watermark = Self::read_counter(&trx, &high_watermark_key)
             .await?;
 
-        debug!("get_topic_metadata: topic: {}, high_watermark", high_watermark);
-
         Ok(TopicMetadata {
             topic_name: topic_name.to_string(),
             low_watermark: -1,
@@ -350,18 +338,17 @@ impl MessageCollectorWorker {
     #[inline]
     async fn read_counter(trx: &Transaction, key: &[u8]) -> Result<i64, FdbError> {
         let raw_counter = trx
-            .get(key, true)
+            .get(key, false)
             .await?;
 
         match raw_counter {
             None => {
-                return Ok(-1);
+                return Ok(0);
             }
             Some(counter) => {
                 let counter = byteorder::LE::read_i64(counter.as_ref());
                 return Ok(counter);
             }
-            
         }
     }
 

@@ -67,7 +67,7 @@ impl Agent {
                         ),
                         options: JobOptions::default(),
                     })
-                }, Some(Duration::from_millis(3000))).await?;
+                }, Some(Duration::from_millis(5000))).await?;
                 return Ok(response_code);
             },
         }

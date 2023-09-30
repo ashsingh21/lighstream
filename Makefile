@@ -7,7 +7,7 @@ clean:
 
 start: start_fdb start_minio
 
-start_fdb: start_minio
+start_fdb:
 	docker compose up -d
 	./start.bash
 

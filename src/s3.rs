@@ -9,7 +9,7 @@ use prost::Message;
 use s3_file::{FileMetadata, TopicMetadata, TopicData, TopicMessage};
 
 
-use std::{sync::Arc, io::{Write, Read}, collections::HashMap, time::UNIX_EPOCH};
+use std::{sync::Arc, io::{Write, Read}, collections::HashMap, time::UNIX_EPOCH, path::Path};
 
 use opendal::{services, Operator, layers::LoggingLayer};
 
@@ -23,100 +23,13 @@ use crate::message_collector;
 
 const MAGIC_BYTES: &[u8] = b"12";
 
-
-// #[tokio::main]
-// async fn main() -> anyhow::Result<()> {
-//     dotenv::dotenv().ok();
-//     test_open_dal().await?;
-//     Ok(())
-// }
-
-async fn test_open_dal() -> anyhow::Result<()> {
-    let mut builder = services::S3::default();
-    builder.access_key_id(&std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID not set"));
-    builder.secret_access_key(&std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"));
-    builder.bucket("lightstream");
-    builder.endpoint("http://localhost:9000");
-    builder.region("us-east-1");
-
-    let op = Arc::new(Operator::new(builder)?
-        .layer(LoggingLayer::default())
-        .finish());
-
-    let file = "topic_data_batch";
-
-    let mut s3_file = S3File::new(op.clone());
-
-    s3_file.upload_and_clear().await?;
-
-    let start = tokio::time::Instant::now();
-    let s3_file_reader = S3FileReader::try_new(file.to_string(), op.clone()).await?;
-    let topic_data = s3_file_reader.get_topic_data("topic_0").await?;
-
-    println!("took to fetch and decode topic data: {:?}", start.elapsed());
-
-    Ok(())
+#[derive(Debug, Clone)]
+pub struct BatchStatistic {
+    pub topic_name: String,
+    pub num_messages: u32,
 }
 
-
-fn create_s3_file_bytes(n_topics: usize, n_messages: usize) -> Bytes {
-
-    let mut file_buffer = BytesMut::new();
-
-    let mut topics_metadata = Vec::new();
-
-
-    
-    for i in 0..n_topics {
-        let mut gz = GzEncoder::new(Vec::new(), flate2::Compression::default());
-        let topic_name = format!("topic_{}", i);
-
-        let topic_data_buffer = {
-            let topic_data = create_topic_data( 0, n_messages, topic_name.as_str());
-            let topic_data_buffer = Bytes::from(topic_data.encode_to_vec());
-            gz.write_all(&topic_data_buffer).expect("failed to write to gz");
-            gz.finish().expect("failed to flush gz")
-        };
-  
-        let topic_metadata = TopicMetadata {
-            name: topic_name,
-            watermark_start_offset: 0,
-            file_offset_start: file_buffer.len() as u64,
-            file_offset_end: file_buffer.len() as u64 +  topic_data_buffer.len() as u64,
-            num_messages: n_messages as u32,
-        };
-
-        file_buffer.put(&topic_data_buffer[..]);
-        topics_metadata.push(topic_metadata);
-    }
-
-    let file_metadata = FileMetadata { topics_metadata }.encode_to_vec();
-    let file_metadata_len = file_metadata.len() as u32;
-
-    file_buffer.put(Bytes::from(file_metadata));
-    file_buffer.put_u32_le(file_metadata_len);
-    file_buffer.put(MAGIC_BYTES);
-
-    file_buffer.into()
-}
-
-fn create_topic_data(watermark_start_offset: u64, n_messages: usize, topic_name: &str) -> TopicData {
-    let mut topics_data = TopicData { topic_name: topic_name.to_string(),  messages: Vec::new() };
-
-    // 1 mb value
-    let value = vec![234_u8; 1_000_000];
-    for i in 0..n_messages {
-        let message = TopicMessage {
-            offset: watermark_start_offset + i as u64,
-            timestamp: 0,
-            key: topic_name.as_bytes().to_vec(),
-            value: value.clone()
-        };
-        topics_data.messages.push(message);
-    }
-
-    topics_data
-}
+pub type BatchStatistics = Vec<BatchStatistic>;
 
 pub struct S3File {
     pub topic_data: HashMap<String, TopicData>,
@@ -138,6 +51,10 @@ impl S3File {
             compression_buffer: Vec::new(),
             op
         }
+    }
+
+    pub fn size(&self) -> usize {
+        self.topic_data.len()
     }
 
     /// User's responsibility to ensure that topic_data and topic_metadata are for same topic
@@ -166,9 +83,10 @@ impl S3File {
         }
     }
 
-    pub async fn upload_and_clear(&mut self) -> anyhow::Result<()> {
-        self.bytes();
-        
+    // FIXME: use Path or explicit type for filename since String is ambiguous
+    pub async fn upload_and_clear(&mut self) -> anyhow::Result<(String, BatchStatistics)> {
+
+        let batch_statistics = self.bytes();
         // create unique filename 
         let current_time = std::time::SystemTime::now();
         let filename = format!("topic_data_batch_{}", current_time.duration_since(UNIX_EPOCH).expect("time went backwards").as_nanos());
@@ -179,7 +97,7 @@ impl S3File {
         self.op.write(&path, self.file_buffer.to_vec()).await?;
         self.clear();
 
-        Ok(())
+        Ok((path, batch_statistics))
     }
 
     fn clear(&mut self) {
@@ -189,10 +107,15 @@ impl S3File {
         self.compression_buffer.clear();
     }
 
-    fn bytes(&mut self) {
+    fn bytes(&mut self) -> BatchStatistics {
         let mut topics_metadata = Vec::new();
+        let mut batch_statistics = Vec::new();
 
         for (topic_name, topic_data) in self.topic_data.iter() {
+            batch_statistics.push(BatchStatistic {
+                topic_name: topic_name.clone(),
+                num_messages: topic_data.messages.len() as u32,
+            });
             topic_data.encode(&mut self.topic_data_buffer).expect("failed to encode topic data");
             let mut gzip = flate2::write::GzEncoder::new(&mut self.compression_buffer, flate2::Compression::default());
             gzip.write_all(&self.topic_data_buffer).expect("failed to write to gz");
@@ -219,6 +142,9 @@ impl S3File {
         self.file_buffer.put(&file_metadata[..]);
         self.file_buffer.put_u32_le(file_metadata_len);
         self.file_buffer.put(MAGIC_BYTES);
+
+
+        batch_statistics
     }
 }
 

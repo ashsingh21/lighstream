@@ -41,5 +41,10 @@ path = "src/pubsub_server.rs"
 name = "client"
 path = "src/client.rs"
 
+[[bin]]
+name = "metadata"
+path = "src/metadata_client.rs"
+
+
 [build-dependencies]
 tonic-build = "0.10"

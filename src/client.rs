@@ -31,6 +31,13 @@ async fn main() -> anyhow::Result<()> {
     let op = Arc::new(Operator::new(builder)?
         .layer(LoggingLayer::default())
         .finish());
+
+        // offset: topic_metadatatest_topic_test_topic_3offset_start0
+        // file name for offset: topics_data/topic_data_batch_1696021189246154090
+        // offset: topic_metadatatest_topic_test_topic_3offset_start19
+        // file name for offset: topics_data/topic_data_batch_1696021189241050439
+        // offset: topic_metadatatest_topic_test_topic_3offset_start2000
+        // file name for offset: topics_data/topic_data_batch_1696021192243735389
     
     // let mut s3_file = s3::S3File::new(op.clone());
     // let message = Message::new("topic_1".to_string(), Bytes::from("hello".to_string()));
@@ -40,33 +47,35 @@ async fn main() -> anyhow::Result<()> {
 
     // s3_file.upload_and_clear().await?;
 
-    let path = format!("topics_data/{}", "topic_data_batch_1695934168684356432");
-    let s3_reader = s3::S3FileReader::try_new(path, op).await.expect("could not create s3 reader");
+    // let path = format!("topics_data/{}", "topic_data_batch_1696021189246154090");
+    // let s3_reader = s3::S3FileReader::try_new(path, op).await.expect("could not create s3 reader");
 
-    for meta in s3_reader.file_metadata.topics_metadata.iter() {
-        println!("{:?}", meta);
-    }
+    // for meta in s3_reader.file_metadata.topics_metadata.iter() {
+    //     if meta.name == "test_topic_test_topic_3" {
+    //         println!("meta: {:?}", meta);
+    //     }
+    // }
 
-    let topics_data = s3_reader.get_topic_data("test_topic_test_topic_3").await.expect("could not get topic data");
-    println!("topic name {:?}", topics_data.topic_name);
+    // let topics_data = s3_reader.get_topic_data("test_topic_test_topic_3").await.expect("could not get topic data");
+    // println!("topic name {:?}", topics_data.topic_name);
     // for data in topics_data.messages.iter() {
     //     println!("{:?}", String::from_utf8(data.key.clone()));
-    //     println!("{:?}", String::from_utf8(data.value.clone()));
+    //     // println!("{:?}", String::from_utf8(data.value.clone()));
     // }
 
-    // let mut handles= Vec::new();
+    let mut handles= Vec::new();
 
-    // for _ in 0..4 {
-    //     let handle = thread::spawn(|| {
-    //         let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
-    //         rt.block_on(start()).expect("failed to start client");
-    //     });
-    //     handles.push(handle);
-    // }   
+    for _ in 0..2 {
+        let handle = thread::spawn(|| {
+            let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
+            rt.block_on(start()).expect("failed to start client");
+        });
+        handles.push(handle);
+    }   
 
-    // for handle in handles {
-    //     handle.join().expect("failed to join thread");
-    // }
+    for handle in handles {
+        handle.join().expect("failed to join thread");
+    }
 
     Ok(())
 
@@ -74,12 +83,22 @@ async fn main() -> anyhow::Result<()> {
 
 
 async fn start() -> Result<(), Box<dyn std::error::Error>> {
-    let client = PubSubClient::connect("http://[::1]:50051").await?;
-    let limit = 10_000;
+    let mut client = PubSubClient::connect("http://[::1]:50051").await?;
+    let limit = 10000;
 
     let mut n = 1;
     let mut start = tokio::time::Instant::now();
     let mut task_set = tokio::task::JoinSet::new();
+
+    // for _ in 0..200 {
+    //     let topic_name = format!("test_topic_0");
+    //     let request = tonic::Request::new(PublishRequest {
+    //         topic_name: topic_name.into(),
+    //         message: Bytes::from("hello world".to_string()).into(),
+    //     });
+
+    //     let _response = client.publish(request).await;
+    // }
 
     loop {
         if n == limit {
@@ -94,9 +113,11 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let topic_name = format!("test_topic_{}", n % 5);
+        let kb_50 = 50;
+        let random_vec_bytes: Vec<u8> = (0..kb_50).map(|_| rand::random::<u8>()).collect();
         let request = tonic::Request::new(PublishRequest {
-            topic_name: format!("test_topic_{}", topic_name).into(),
-            message: "hello".into(),
+            topic_name: topic_name.into(),
+            message: random_vec_bytes,
         });
 
         let mut client = client.clone();
@@ -106,4 +127,6 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
        
         n += 1;
     }
+
+    Ok(())
 }
