@@ -77,7 +77,7 @@ async fn consumer(topic_name: &str) -> anyhow::Result<()> {
         .layer(LoggingLayer::default())
         .finish());
 
-    let mut start_offset = 718975;
+    let mut start_offset = 0;
     let limit = 50000;
 
     loop {
@@ -91,7 +91,6 @@ async fn consumer(topic_name: &str) -> anyhow::Result<()> {
 
         match metadata_client.get_files_to_consume(topic_name, start_offset, limit).await {
             Ok(sorted_map) => {
-                println!("sorted map: {:?}", sorted_map);
                 assert!(sorted_map.len() > 0, "This should not happen?");
                 for (_offset, path) in sorted_map {
                     let s3_reader = s3::S3FileReader::try_new(path, op.clone()).await.expect("could not create s3 reader");
@@ -114,6 +113,6 @@ async fn consumer(topic_name: &str) -> anyhow::Result<()> {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
-    Ok(())
+    // Ok(())
 
 }
