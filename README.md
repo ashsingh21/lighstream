@@ -13,3 +13,5 @@ The design of the Agent could be Agent {Router;  Service (service is currently a
 Note: ActorFactory uses unbounded queue so it can cause exhaustion of memory if workers dont process  queue fast enough
 
 Note: you will need to install the fdbclient on the host to connect to the cluster
+
+TODO: Build table abstraction over topic subspaces

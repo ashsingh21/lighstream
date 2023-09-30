@@ -1,8 +1,12 @@
+use std::collections::{HashSet, BTreeMap};
+
 use anyhow::Result;
 use async_trait::async_trait;
 use byteorder::ByteOrder;
-use foundationdb::{options, tuple::Subspace, FdbError, Transaction};
+use foundationdb::{options, tuple::{Subspace, unpack}, FdbError, Transaction, RangeOption, future::FdbValue};
+use futures::TryStreamExt;
 use tracing::info;
+use tracing_subscriber::fmt::format;
 
 use crate::message_collector::{BatchRef, Message, TopicName};
 
@@ -31,9 +35,11 @@ pub trait MetadataClient {
 
     async fn commit_batch<'a>(&self, batch: BatchRef<'a>) -> anyhow::Result<()>;
 
-    fn get_topics(&self) -> Result<Vec<String>>;
+    async fn get_topics(&self) -> Result<Vec<String>>;
 
     async fn get_topic_metadata(&self, topic_name: &str) -> Result<TopicMetadata>;
+
+    async fn get_files_to_consume(&self, topic_name: &str, start_offset: i64, limit: i64) -> anyhow::Result<BTreeMap<i64, String>>;
 
     async fn increment_high_watermark(&self, topic_name: &str) -> Result<()>;
 
@@ -89,6 +95,14 @@ impl FdbMetadataClient {
         let counter = byteorder::LE::read_i64(raw_counter.as_ref());
         Ok(counter)
     }
+
+    async fn get_topic_offset_start_subspace(topic_name: &str) -> Subspace {
+        let topic_metadata_subspace = Subspace::all().subspace(&"topic_metadata");
+        let topic_name_subspace = topic_metadata_subspace.subspace(&topic_name);
+        topic_name_subspace.subspace(&"offset_start")
+    }
+
+
 }
 
 #[async_trait]
@@ -146,8 +160,69 @@ impl MetadataClient for FdbMetadataClient {
         Ok(())
     }
 
-    fn get_topics(&self) -> Result<Vec<String>> {
-        todo!()
+    async fn get_topics(&self) -> Result<Vec<String>> {
+        let trx = self.db.create_trx().expect("could not create transaction");
+
+        // // let mut topics = HashSet::new();
+    
+        // let offset_start_subspace = Self::get_offset_start_subspace();
+
+        // let range_option = RangeOption::from(topic_metadata_range);
+
+        // let range = trx.get_range(&range_option, 1000, false).await?;
+
+        // // for data in range {
+        // //     let topic_name: (String, String, String) = self.topic_metadata_subspace.unpack(data.key()).expect("could not unpack key");
+        // //     // topics.insert(topic_name.0);
+        // // }
+
+        // for data in range {
+        //     println!("{:?}", String::from_utf8(data.key().to_vec()));
+        // }
+
+        Ok(HashSet::new().into_iter().collect())
+    }
+
+    async fn get_files_to_consume(&self, topic_name:&str, start_offset: i64, num_messages: i64) -> anyhow::Result<BTreeMap<i64, String>> {
+        let topic_metadata = self.get_topic_metadata(topic_name).await?;
+
+        if topic_metadata.high_watermark <= start_offset {
+            return Err(anyhow::anyhow!(
+                "start offset {} is greater than or equal to high watermark {}, note: high watermark - 1 is the last offset",
+                start_offset,
+                topic_metadata.high_watermark
+            ));
+        }
+
+        let trx = self.db.create_trx().expect("could not create transaction");
+
+        let topic_offset_start_subspace = Self::get_topic_offset_start_subspace(topic_name).await;
+        
+        let offset_start_key = topic_offset_start_subspace.pack(&start_offset);
+        let offset_end_key = topic_offset_start_subspace.pack(&(start_offset + num_messages));
+
+        let offset_start_key_selector = foundationdb::KeySelector::last_less_or_equal(offset_start_key);
+        let offset_end_key_selector = foundationdb::KeySelector::first_greater_than(offset_end_key);
+
+        let range_option = RangeOption::from((offset_start_key_selector, offset_end_key_selector));
+        let values: Vec<FdbValue> = trx.get_ranges_keyvalues(range_option, false).try_collect().await?;
+
+        if values.is_empty() {
+            return Err(anyhow::anyhow!("no values found"));
+        }
+
+        let mut sorted_offset_file_map = BTreeMap::new();
+
+        for key_value in values {
+            let key = key_value.key();
+            let value = key_value.value();
+            let offset: i64 = {
+                topic_offset_start_subspace.unpack(key).expect("could not unpack key")
+            };
+            sorted_offset_file_map.insert(offset, String::from_utf8(value.to_vec()).unwrap());
+        }
+
+        Ok(sorted_offset_file_map)
     }
 
     async fn get_topic_metadata(&self, topic_name: &str) -> Result<TopicMetadata> {

@@ -5,9 +5,13 @@ clean:
 	- docker rmi $(docker images -a -q) -f 
 	- echo 'y' | docker container prune
 
-start:
+start: start_fdb start_minio
+
+start_fdb:
 	docker compose up -d
 	./start.bash
+
+start_minio:
 	docker run -d \
    		-p 9000:9000 \
    		-p 9090:9090 \
@@ -16,6 +20,7 @@ start:
    		-e "MINIO_ROOT_USER=admin" \
    		-e "MINIO_ROOT_PASSWORD=test_admin" \
    		quay.io/minio/minio server /data --console-address ":9090"
+
 
 restart_app:
 	docker compose down
