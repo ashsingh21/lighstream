@@ -73,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
     let _guard = unsafe { foundationdb::boot() };
     
     let addr = "[::1]:50051".parse()?;
-    let pubsub_service = Agent::try_new(50).await?;
+    let pubsub_service = Agent::try_new(200).await?;
 
     Server::builder()
         .add_service(PubSubServer::new(pubsub_service))

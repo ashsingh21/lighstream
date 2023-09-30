@@ -184,6 +184,16 @@ impl MetadataClient for FdbMetadataClient {
     }
 
     async fn get_files_to_consume(&self, topic_name:&str, start_offset: i64, num_messages: i64) -> anyhow::Result<BTreeMap<i64, String>> {
+        let topic_metadata = self.get_topic_metadata(topic_name).await?;
+
+        if topic_metadata.high_watermark <= start_offset {
+            return Err(anyhow::anyhow!(
+                "start offset {} is greater than or equal to high watermark {}, note: high watermark - 1 is the last offset",
+                start_offset,
+                topic_metadata.high_watermark
+            ));
+        }
+
         let trx = self.db.create_trx().expect("could not create transaction");
 
         let topic_offset_start_subspace = Self::get_topic_offset_start_subspace(topic_name).await;
@@ -191,16 +201,16 @@ impl MetadataClient for FdbMetadataClient {
         let offset_start_key = topic_offset_start_subspace.pack(&start_offset);
         let offset_end_key = topic_offset_start_subspace.pack(&(start_offset + num_messages));
 
-        println!("start: {}, end: {}", start_offset.to_string(), (start_offset + num_messages).to_string());
-
         let offset_start_key_selector = foundationdb::KeySelector::last_less_or_equal(offset_start_key);
         let offset_end_key_selector = foundationdb::KeySelector::first_greater_than(offset_end_key);
 
-        println!("offset_start_key_selector: {:?}", offset_start_key_selector);
-        println!("offset_end_key_selector: {:?}", offset_end_key_selector);
-
         let range_option = RangeOption::from((offset_start_key_selector, offset_end_key_selector));
         let values: Vec<FdbValue> = trx.get_ranges_keyvalues(range_option, false).try_collect().await?;
+
+        if values.is_empty() {
+            return Err(anyhow::anyhow!("no values found"));
+        }
+
         let mut sorted_offset_file_map = BTreeMap::new();
 
         for key_value in values {
@@ -212,21 +222,6 @@ impl MetadataClient for FdbMetadataClient {
             sorted_offset_file_map.insert(offset, String::from_utf8(value.to_vec()).unwrap());
         }
 
-        // for data in offset_mappings.into() {
-        //     let offset: String = topic_offset_start_subspace.unpack(data.k).expect("could not unpack key");
-        //     let offset: i64 = offset.parse().expect("could not parse offset");
-        //     println!("offset: {}", offset);
-        //     sorted_offset_file_map.insert(offset, String::from_utf8().unwrap());
-        // }
-
-        // TODO: what to do with iteration?
-        // let datas = trx.get_range(&range_option, 1, false).await?;
-        // let mut sorted_offset_file_map = BTreeMap::new();
-        // for data in datas {
-        //     let offset: String = topic_offset_start_subspace.unpack(data.key()).expect("could not unpack key");
-        //     let offset: i64 = offset.parse().expect("could not parse offset");
-        //     sorted_offset_file_map.insert(offset, String::from_utf8(data.value().to_vec()).unwrap());
-        // }
         Ok(sorted_offset_file_map)
     }
 

@@ -188,17 +188,12 @@ impl S3FileReader {
             end: topic_metadata.file_offset_end,
         };
 
-        let start = tokio::time::Instant::now();
         let compressed_bytes = Self::get_bytes_for_range(&self.path, self.s3_operator.clone(), range).await?;
 
         let mut bytes = flate2::read::GzDecoder::new(&compressed_bytes[..]);
-        println!("took to fetch and decode topic data: {:?}", start.elapsed());
 
-        let start = tokio::time::Instant::now();
         let mut out_buffer = Vec::new();
         bytes.read_to_end(&mut out_buffer).expect("failed to read gz");
-        println!("out buffer len: {}", human_bytes(out_buffer.len() as f64));
-        println!("took to read gz: {:?}", start.elapsed());
 
         let topic_data = TopicData::decode(&out_buffer[..]).unwrap();
 

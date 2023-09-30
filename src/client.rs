@@ -65,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut handles= Vec::new();
 
-    for _ in 0..2 {
+    for _ in 0..4 {
         let handle = thread::spawn(|| {
             let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
             rt.block_on(start()).expect("failed to start client");
@@ -90,23 +90,12 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let mut start = tokio::time::Instant::now();
     let mut task_set = tokio::task::JoinSet::new();
 
-    // for _ in 0..200 {
-    //     let topic_name = format!("test_topic_0");
-    //     let request = tonic::Request::new(PublishRequest {
-    //         topic_name: topic_name.into(),
-    //         message: Bytes::from("hello world".to_string()).into(),
-    //     });
-
-    //     let _response = client.publish(request).await;
-    // }
-
     loop {
         if n == limit {
             while let Some(res) = task_set.join_next().await {
                 res.expect("task failed");
             }
             println!("{} messages sent in {:?}", n, start.elapsed());
-            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
             start = tokio::time::Instant::now();
             n = n % limit;
             task_set = tokio::task::JoinSet::new();
@@ -119,6 +108,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
             topic_name: topic_name.into(),
             message: random_vec_bytes,
         });
+
 
         let mut client = client.clone();
         task_set.spawn( async move {
