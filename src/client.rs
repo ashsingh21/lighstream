@@ -65,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut handles= Vec::new();
 
-    for _ in 0..4 {
+    for _ in 0..1 {
         let handle = thread::spawn(|| {
             let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
             rt.block_on(start()).expect("failed to start client");
@@ -118,5 +118,5 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         n += 1;
     }
 
-    Ok(())
+    // Ok(())
 }

@@ -109,7 +109,7 @@ impl Actor for MessageCollectorWorker {
     ) -> Result<Self::State, ActorProcessingErr> {
         let wid = startup_context.wid.clone();
         myself.send_interval(
-            ractor::concurrency::tokio_primatives::Duration::from_millis(5000),
+            ractor::concurrency::tokio_primatives::Duration::from_millis(1000),
             move || {
                 // TODO: make sure this gets uniformly distributed to all workers
                 WorkerMessage::Dispatch(Job {

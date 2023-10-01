@@ -229,6 +229,8 @@ impl MetadataClient for FdbMetadataClient {
         // TODO: check if topic exists and return error if it doesn't
 
         let trx = self.db.create_trx().expect("could not create transaction");
+        trx.set_option(options::TransactionOption::Timeout(1000))?;
+
         let topic_name_subspace = self.topic_metadata_subspace.subspace(&topic_name);
 
         // let low_watermark_key = topic_name_subspace.pack(&"low_watermark");
