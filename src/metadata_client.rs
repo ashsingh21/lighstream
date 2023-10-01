@@ -78,7 +78,7 @@ async fn consumer(topic_name: &str) -> anyhow::Result<()> {
         .finish());
 
     let mut start_offset = 0;
-    let limit = 50000;
+    let limit = 1000;
 
     loop {
         let metadata_client =
@@ -97,20 +97,20 @@ async fn consumer(topic_name: &str) -> anyhow::Result<()> {
         
                     let topics_data = s3_reader.get_topic_data(topic_name).await.expect("could not get topic data");
         
-                    for _data in topics_data.messages.iter() {
+                    for data in topics_data.messages.iter() {
                         start_offset += 1;
-                        // println!("{:?}", String::from_utf8(data.key.clone()));
+                        println!("{:?}", String::from_utf8(data.key.clone()));
+                        println!("{:?}", String::from_utf8(data.value.clone()));
         
                     }
                 }
                 println!("time took to fetch files and decode data: {:?}", start.elapsed());
             },
             Err(e) => {
-                println!("error while consuming: {:?}", e);
+                // println!("error while consuming: {:?}", e);
                 // break;
             }
         }
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
     // Ok(())

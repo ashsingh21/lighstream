@@ -43,3 +43,21 @@ services:
       FDB_COORDINATOR: ${FDB_COORDINATOR}
       FDB_NETWORKING_MODE: ${FDB_NETWORKING_MODE}
       FDB_COORDINATOR_PORT: ${FDB_COORDINATOR_PORT}
+
+  fdb-server-3:
+    depends_on:
+      - fdb-coordinator
+    image: foundationdb/foundationdb:${FDB_VERSION}
+    environment:
+      FDB_COORDINATOR: ${FDB_COORDINATOR}
+      FDB_NETWORKING_MODE: ${FDB_NETWORKING_MODE}
+      FDB_COORDINATOR_PORT: ${FDB_COORDINATOR_PORT}
+
+  fdb-server-4:
+    depends_on:
+      - fdb-coordinator
+    image: foundationdb/foundationdb:${FDB_VERSION}
+    environment:
+      FDB_COORDINATOR: ${FDB_COORDINATOR}
+      FDB_NETWORKING_MODE: ${FDB_NETWORKING_MODE}
+      FDB_COORDINATOR_PORT: ${FDB_COORDINATOR_PORT}
