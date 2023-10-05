@@ -40,9 +40,9 @@ path = "src/pubsub_server.rs"
 # name ="s3"
 # path = "src/s3.rs"
 
-# [[bin]] # Bin to run the HelloWorld gRPC client
-# name = "client"
-# path = "src/client.rs"
+[[bin]] # Bin to run the HelloWorld gRPC client
+name = "client"
+path = "src/client.rs"
 
 # [[bin]]
 # name = "metadata"

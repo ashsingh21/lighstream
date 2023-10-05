@@ -159,7 +159,7 @@ impl Actor for MessageCollectorWorker {
                             let start = tokio::time::Instant::now();
                             match state.message_state.s3_file.upload_and_clear().await {
                                 Ok((path, batch_statistic)) => {
-                                    self.streaming_db.commit(&path, &batch_statistic).await.expect("could not commit batch");
+                                    self.streaming_db.commit_batch_statistics(&path, &batch_statistic).await.expect("could not commit batch");
                                     info!("upload to s3 took: {}ms", start.elapsed().as_millis());
                                 }
                                 Err(e) => {
@@ -189,7 +189,7 @@ impl Actor for MessageCollectorWorker {
                             let start = tokio::time::Instant::now();
                             match state.message_state.s3_file.upload_and_clear().await {
                                 Ok((path, batch_statistic)) => {
-                                    self.streaming_db.commit(&path, &batch_statistic).await.expect("could not commit batch");
+                                    self.streaming_db.commit_batch_statistics(&path, &batch_statistic).await.expect("could not commit batch");
                                     info!("upload to s3 took: {}ms", start.elapsed().as_millis());
                                 }
                                 Err(e) => {

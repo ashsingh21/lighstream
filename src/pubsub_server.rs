@@ -75,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
 
     let _guard = unsafe { foundationdb::boot() };
     
-    // start_server().await?;
+    start_server().await?;
 
     // test streaming latyer
     let stream_layer = StreamingLayer::new();

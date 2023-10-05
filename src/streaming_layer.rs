@@ -119,7 +119,7 @@ impl StreamingLayer {
         .map(|data| {
             let (topic_name, partition): (String, Partition) =
             high_watermark_subspace.unpack(data.key()).expect("could not unpack key");
-            let high_watermark = Self::read_high_watermark(data.value().as_ref());
+            let high_watermark = Self::read_high_watermark_raw(data.value().as_ref());
             TopicPartitionMetadata {
                 topic_name,
                 partition,
@@ -141,7 +141,7 @@ impl StreamingLayer {
 
             trx.get(&high_watermark_key, false).await?.expect("topic or topic partition does not exist");
 
-            let high_watermark = Self::read_counter(&trx, &high_watermark_key).await?;
+            let high_watermark = Self::read_high_watermark(&trx, &high_watermark_key).await?;
 
             Ok(TopicPartitionMetadata {
                 topic_name: topic_name.to_string(),
@@ -156,7 +156,7 @@ impl StreamingLayer {
 
     pub async fn get_topic_partition_metadata_with_transaction(&self, trx: &Transaction, topic_name: &str, partition: Partition) -> anyhow::Result<TopicPartitionMetadata, FdbBindingError> {
             let high_watermark_key = self.subspace.get_topic_partition_high_watermark_key(topic_name, partition);
-            let high_watermark = Self::read_counter(&trx, &high_watermark_key).await?;
+            let high_watermark = Self::read_high_watermark(&trx, &high_watermark_key).await?;
 
             Ok(TopicPartitionMetadata {
                 topic_name: topic_name.to_string(),
@@ -168,7 +168,7 @@ impl StreamingLayer {
 
 
 
-    pub async fn commit(&self, path: &str, batch: &BatchStatistics) -> anyhow::Result<()> {
+    pub async fn commit_batch_statistics(&self, path: &str, batch: &BatchStatistics) -> anyhow::Result<()> {
         let batch_ref = &batch;
         // TODO: maybe trigger a cleanup?
         self
@@ -212,7 +212,7 @@ impl StreamingLayer {
     }
 
     #[inline]
-    async fn read_counter(trx: &Transaction, key: &[u8]) -> Result<i64, FdbError> {
+    async fn read_high_watermark(trx: &Transaction, key: &[u8]) -> Result<i64, FdbError> {
         let raw_counter = trx
             .get(key, true)
             .await?;
@@ -222,14 +222,14 @@ impl StreamingLayer {
                 return Ok(0);
             }
             Some(counter) => {
-                let counter = Self::read_high_watermark(counter.as_ref());
+                let counter = Self::read_high_watermark_raw(counter.as_ref());
                 return Ok(counter);
             }
         }
     }
 
     #[inline]
-    fn read_high_watermark(counter: &[u8]) -> i64 {
+    fn read_high_watermark_raw(counter: &[u8]) -> i64 {
         byteorder::LE::read_i64(counter.as_ref())
     }
 
