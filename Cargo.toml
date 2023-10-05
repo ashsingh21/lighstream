@@ -29,6 +29,9 @@ opendal = "0.40.0"
 human_bytes = "0.4.3"
 flate2 = "1.0.27"
 
+# [profile.release]
+# lto = true
+
 [[bin]] # Bin to run the HelloWorld gRPC server
 name = "lightstream"
 path = "src/pubsub_server.rs"
@@ -37,13 +40,21 @@ path = "src/pubsub_server.rs"
 # name ="s3"
 # path = "src/s3.rs"
 
-[[bin]] # Bin to run the HelloWorld gRPC client
-name = "client"
-path = "src/client.rs"
+# [[bin]] # Bin to run the HelloWorld gRPC client
+# name = "client"
+# path = "src/client.rs"
 
-[[bin]]
-name = "metadata"
-path = "src/metadata_client.rs"
+# [[bin]]
+# name = "metadata"
+# path = "src/metadata_client.rs"
+
+# [[bin]]
+# name = "compactor"
+# path = "src/compactor.rs"
+
+# [[bin]]
+# name = "streaming-layer"
+# path = "src/streaming_layer.rs"
 
 
 [build-dependencies]

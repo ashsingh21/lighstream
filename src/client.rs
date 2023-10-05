@@ -65,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut handles= Vec::new();
 
-    for _ in 0..1 {
+    for _ in 0..2 {
         let handle = thread::spawn(|| {
             let rt = tokio::runtime::Runtime::new().expect("failed to create runtime");
             rt.block_on(start()).expect("failed to start client");
@@ -84,39 +84,54 @@ async fn main() -> anyhow::Result<()> {
 
 async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let mut client = PubSubClient::connect("http://[::1]:50051").await?;
-    let limit = 10000;
+    let limit = 20000;
 
     let mut n = 1;
     let mut start = tokio::time::Instant::now();
-    let mut task_set = tokio::task::JoinSet::new();
+    // let mut task_set = tokio::task::JoinSet::new();
 
-    loop {
-        if n == limit {
-            while let Some(res) = task_set.join_next().await {
-                res.expect("task failed");
-            }
-            println!("{} messages sent in {:?}", n, start.elapsed());
-            start = tokio::time::Instant::now();
-            n = n % limit;
-            task_set = tokio::task::JoinSet::new();
-        }
 
-        let topic_name = format!("test_topic_{}", n % 5);
-        let kb_50 = 50;
-        let random_vec_bytes: Vec<u8> = (0..kb_50).map(|_| rand::random::<u8>()).collect();
+    for _ in 0..100 {
+        let topic_name = format!("test_topic_0");
+        let kb_50 = 50 * 1024; // 50kb
+
+        let random_string = (0..kb_50).map(|_| rand::random::<char>()).collect::<String>();
+
         let request = tonic::Request::new(PublishRequest {
             topic_name: topic_name.into(),
-            message: random_vec_bytes,
+            message: random_string.into_bytes(),
         });
-
-
-        let mut client = client.clone();
-        task_set.spawn( async move {
-            let _response = client.publish(request).await;
-        });
-       
-        n += 1;
+        let _response = client.publish(request).await;
+        // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
     }
 
-    // Ok(())
+    // loop {
+    //     if n == limit {
+    //         while let Some(res) = task_set.join_next().await {
+    //             res.expect("task failed");
+    //         }
+    //         println!("{} messages sent in {:?}", n, start.elapsed());
+    //         start = tokio::time::Instant::now();
+    //         n = n % limit;
+    //         task_set = tokio::task::JoinSet::new();
+    //     }
+
+    //     let topic_name = format!("test_topic_{}", n % 5);
+    //     let kb_50 = 50;
+    //     let random_vec_bytes: Vec<u8> = (0..kb_50).map(|_| rand::random::<u8>()).collect();
+    //     let request = tonic::Request::new(PublishRequest {
+    //         topic_name: topic_name.into(),
+    //         message: random_vec_bytes,
+    //     });
+
+
+    //     let mut client = client.clone();
+    //     task_set.spawn( async move {
+    //         let _response = client.publish(request).await;
+    //     });
+       
+    //     n += 1;
+    // }
+
+    Ok(())
 }

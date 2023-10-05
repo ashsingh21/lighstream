@@ -7,6 +7,7 @@ mod message_collector;
 mod metadata;
 mod producer;
 mod s3;
+mod streaming_layer;
 
 
 #[tokio::main]
@@ -84,14 +85,12 @@ async fn consumer(topic_name: &str) -> anyhow::Result<()> {
         let metadata_client =
             Arc::new(metadata::FdbMetadataClient::try_new().expect("could not create metadata client"));
 
-        
-        println!("start offset: {:?}", start_offset);
-
         let start = tokio::time::Instant::now();
 
         match metadata_client.get_files_to_consume(topic_name, start_offset, limit).await {
             Ok(sorted_map) => {
                 assert!(sorted_map.len() > 0, "This should not happen?");
+                println!("start offset: {:?}", start_offset);
                 for (_offset, path) in sorted_map {
                     let s3_reader = s3::S3FileReader::try_new(path, op.clone()).await.expect("could not create s3 reader");
         
@@ -99,9 +98,9 @@ async fn consumer(topic_name: &str) -> anyhow::Result<()> {
         
                     for data in topics_data.messages.iter() {
                         start_offset += 1;
-                        println!("{:?}", String::from_utf8(data.key.clone()));
-                        println!("{:?}", String::from_utf8(data.value.clone()));
-        
+                        let key = String::from_utf8(data.key.clone()).expect("could not convert key to string");
+                        let value = String::from_utf8(data.value.clone()).expect("could not convert value to string");
+                        println!("key: {:?} value len: {:?}", key, value.len());
                     }
                 }
                 println!("time took to fetch files and decode data: {:?}", start.elapsed());
@@ -113,6 +112,6 @@ async fn consumer(topic_name: &str) -> anyhow::Result<()> {
         }
     }
 
-    // Ok(())
+    Ok(())
 
 }

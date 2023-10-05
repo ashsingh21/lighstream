@@ -1,10 +1,12 @@
 mod agent;
 mod message_collector;
-mod metadata;
 mod s3;
+mod streaming_layer;
 mod pubsub {
     tonic::include_proto!("pubsub");
 }
+
+use dotenv;
 
 use bytes::Bytes;
 use ractor::rpc::CallResult;
@@ -14,12 +16,10 @@ use tonic::{Request, Response, Status};
 use pubsub::pub_sub_server::PubSub;
 use pubsub::{PublishRequest, PublishResponse};
 
-
-use dotenv;
-
 use tracing::info;
 use crate::agent::{Agent, Command};
 use crate::pubsub::pub_sub_server::PubSubServer;
+use crate::streaming_layer::StreamingLayer;
 
 #[tonic::async_trait]
 impl PubSub for Agent {
@@ -29,6 +29,7 @@ impl PubSub for Agent {
         match self.send(Command::Send {
             topic_name: request.topic_name,
             message: Bytes::from(request.message),
+            parition: request.partition,
         }).await {
             Ok(call_result) => {
                 // FIXME: this is leaking message factory error codes
@@ -56,6 +57,8 @@ impl PubSub for Agent {
     }
 }
 
+
+// TODO: test streaming layer
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
@@ -72,6 +75,23 @@ async fn main() -> anyhow::Result<()> {
 
     let _guard = unsafe { foundationdb::boot() };
     
+    // start_server().await?;
+
+    // test streaming latyer
+    let stream_layer = StreamingLayer::new();
+
+    stream_layer.create_topic("topic_100", None).await?;
+    stream_layer.create_topic("topic_101", Some(20)).await?;
+    stream_layer.create_topic("topic_102", Some(50)).await?;
+
+    info!("created topics...");
+    let topics = stream_layer.get_all_topics().await?;
+    info!("topics: {:?}", topics);
+
+    Ok(())
+}
+
+async fn start_server() -> anyhow::Result<()> {
     let addr = "[::1]:50051".parse()?;
     let pubsub_service = Agent::try_new(50).await?;
 
