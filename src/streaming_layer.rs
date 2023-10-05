@@ -132,9 +132,15 @@ impl StreamingLayer {
         Ok(topic_partitions_metadata)
     } 
 
+
     pub async fn get_topic_partition_metadata(&self, topic_name: &str, partition: Partition) -> anyhow::Result<TopicPartitionMetadata, FdbBindingError> {
         let topic_partition_metada = self.db.run(|trx, _maybe_committed| async move {
+            // check if topic and partition for that topic exists
+
             let high_watermark_key = self.subspace.get_topic_partition_high_watermark_key(topic_name, partition);
+
+            trx.get(&high_watermark_key, false).await?.expect("topic or topic partition does not exist");
+
             let high_watermark = Self::read_counter(&trx, &high_watermark_key).await?;
 
             Ok(TopicPartitionMetadata {
