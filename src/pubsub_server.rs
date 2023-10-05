@@ -86,6 +86,10 @@ async fn main() -> anyhow::Result<()> {
 
     info!("created topics...");
     let topics = stream_layer.get_all_topics().await?;
+    let topic_meta = stream_layer.get_topic_metadata("topic_100").await?;
+    for meta in topic_meta {
+        info!("topic meta: {:?}", meta);
+    }
     info!("topics: {:?}", topics);
 
     Ok(())

@@ -7,11 +7,7 @@ use tracing::info;
 
 use crate::s3::BatchStatistics;
 
-
-#[derive(Debug, Clone)]
-pub struct TopicMetadata {
-    pub partitions: Vec<TopicPartitionMetadata>,
-}
+pub type TopicMetadata = Vec<TopicPartitionMetadata>;
 
 #[derive(Debug, Clone)]
 pub struct TopicPartitionMetadata {
@@ -110,6 +106,7 @@ impl StreamingLayer {
         let trx = self.db.create_trx()?;
 
         let topic_name_subspace = self.subspace.topic_partition_high_watermark.subspace(&topic_name);
+        let high_watermark_subspace = self.subspace.high_watermark_subspace();
 
         let topic_partitions_metadata: Vec<TopicPartitionMetadata> = trx
         .get_range(
@@ -121,8 +118,8 @@ impl StreamingLayer {
         .into_iter()
         .map(|data| {
             let (topic_name, partition): (String, Partition) =
-                topic_name_subspace.unpack(data.key()).expect("could not unpack key");
-            let high_watermark = byteorder::LE::read_i64(data.value().as_ref());
+            high_watermark_subspace.unpack(data.key()).expect("could not unpack key");
+            let high_watermark = Self::read_high_watermark(data.value().as_ref());
             TopicPartitionMetadata {
                 topic_name,
                 partition,
@@ -132,9 +129,7 @@ impl StreamingLayer {
         })
         .collect();
 
-        Ok(TopicMetadata {
-            partitions: topic_partitions_metadata,
-        })
+        Ok(topic_partitions_metadata)
     } 
 
     pub async fn get_topic_partition_metadata(&self, topic_name: &str, partition: Partition) -> anyhow::Result<TopicPartitionMetadata, FdbBindingError> {
@@ -221,10 +216,15 @@ impl StreamingLayer {
                 return Ok(0);
             }
             Some(counter) => {
-                let counter = byteorder::LE::read_i64(counter.as_ref());
+                let counter = Self::read_high_watermark(counter.as_ref());
                 return Ok(counter);
             }
         }
+    }
+
+    #[inline]
+    fn read_high_watermark(counter: &[u8]) -> i64 {
+        byteorder::LE::read_i64(counter.as_ref())
     }
 
 }
