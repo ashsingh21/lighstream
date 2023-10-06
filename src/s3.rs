@@ -186,7 +186,7 @@ pub struct S3FileReader {
 }
 
 impl S3FileReader {
-    pub async fn try_new(path: String, s3_operator: Arc<Operator>) -> anyhow::Result<Self> {
+    pub async fn try_new(path: &str, s3_operator: Arc<Operator>) -> anyhow::Result<Self> {
         let meta = s3_operator.stat(&path).await?;
         let eof = meta.content_length();
 
@@ -207,11 +207,14 @@ impl S3FileReader {
 
         let file_metadata_bytes = Self::get_bytes_for_range(&path, s3_operator.clone(), range).await?;
 
-        Ok(Self { path, s3_operator: s3_operator.clone(), file_metadata: FileMetadata::decode(&file_metadata_bytes[..]).unwrap() })
+        Ok(Self { path: path.to_string(), s3_operator: s3_operator.clone(), file_metadata: FileMetadata::decode(&file_metadata_bytes[..]).unwrap() })
     }
 
-    pub async fn get_topic_data(&self, topic_name: &str) -> anyhow::Result<TopicData> {
-        let topic_metadata = self.file_metadata.topics_metadata.iter().find(|meta| meta.name == topic_name).expect("topic not found");
+    pub async fn get_topic_data(&self, topic_name: &str, partition: Partition) -> anyhow::Result<TopicData> {
+        let topic_metadata = self.file_metadata.topics_metadata
+            .iter()
+            .find(|meta| meta.name == topic_name && meta.partition == partition)
+            .expect("topic or topic partition not found");
 
         let range = std::ops::Range {
             start: topic_metadata.file_offset_start,

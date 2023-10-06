@@ -77,17 +77,6 @@ async fn main() -> anyhow::Result<()> {
     
     start_server().await?;
 
-    // test streaming latyer
-    let stream_layer = StreamingLayer::new();
-
-    stream_layer.create_topic("topic_100", None).await?;
-    stream_layer.create_topic("topic_101", Some(20)).await?;
-    stream_layer.create_topic("topic_102", Some(50)).await?;
-
-    info!("created topics...");
-    let topics = stream_layer.get_all_topics().await?;
-    let topic_meta = stream_layer.get_topic_partition_metadata("topic_102", 49).await?; 
-
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, BTreeMap};
 
 use byteorder::ByteOrder;
 use foundationdb::{tuple::Subspace, Transaction, options::{self}, future::FdbValue, RangeOption, FdbBindingError, FdbError};
@@ -8,6 +8,7 @@ use tracing::info;
 use crate::s3::BatchStatistics;
 
 pub type TopicMetadata = Vec<TopicPartitionMetadata>;
+pub type Offset = i64;
 
 #[derive(Debug, Clone)]
 pub struct TopicPartitionMetadata {
@@ -19,8 +20,8 @@ pub struct TopicPartitionMetadata {
 
 struct StreamingLayerSubspace {
     /// topics_files/{topic_name}/{partition_id}/{start_offset} = {filename}
-    /// topic_partition_high_watermark/{topic_name}/{partition_id} = {high_watermark}
     topics_files: Subspace,
+    /// topic_partition_high_watermark/{topic_name}/{partition_id} = {high_watermark}
     topic_partition_high_watermark: Subspace,
 }
 
@@ -33,9 +34,10 @@ impl StreamingLayerSubspace {
     }
 
     #[inline]
-    fn get_offset_start_key(&self, topic_name: &str, partition: Partition, offset: i64) -> Vec<u8> {
+    fn create_topic_partition_offset_file_key(&self, topic_name: &str, partition: Partition, offset: Offset) -> Vec<u8> {
         self.topics_files.subspace(&topic_name).subspace(&partition).pack(&offset)
     }
+
 
     #[inline]
     fn get_topic_partition_high_watermark_key(&self, topic_name: &str, partition: Partition) -> Vec<u8> {
@@ -132,11 +134,49 @@ impl StreamingLayer {
         Ok(topic_partitions_metadata)
     } 
 
+    pub async fn get_files_to_consume(&self, topic_name: &str, partition: Partition, start_offset: Offset, end_offset: Option<Offset>) -> 
+    anyhow::Result<BTreeMap<Offset, String>> {
+        let trx = self.db.create_trx()?;
+        let offset_start_key = {
+            let offset_start_key = self.subspace.create_topic_partition_offset_file_key(topic_name, partition, start_offset);
+            foundationdb::KeySelector::last_less_or_equal(offset_start_key)
+        };
+
+        let offset_end_key = {
+            let (_, end_key) = self.subspace.topics_files.subspace(&topic_name).subspace(&partition).range();
+            let offset_end_key = end_offset.map_or(end_key, |end_offset| {
+                self.subspace.create_topic_partition_offset_file_key(topic_name, partition, end_offset)
+            });
+            foundationdb::KeySelector::first_greater_than(offset_end_key)
+        };
+
+        let range_option = RangeOption::from((offset_start_key, offset_end_key));
+        let values: Vec<FdbValue> = trx.get_ranges_keyvalues(range_option, false).try_collect().await?;
+
+        if values.is_empty() {
+            return Err(anyhow::anyhow!("no values found"));
+        }
+
+        let mut sorted_offset_file_map = BTreeMap::new();
+        for key_value in values {
+            let key = key_value.key();
+            let value = key_value.value();
+            let offset: Offset = {
+                let (topic_name, partition, offset): (String, Partition, Offset) = self.subspace.topics_files.unpack(key).expect("could not unpack key");
+                assert!(topic_name == topic_name);
+                assert!(partition == partition);
+                offset
+            };
+            sorted_offset_file_map.insert(offset, String::from_utf8(value.to_vec()).expect("could not convert value to string"));
+        }
+
+        Ok(sorted_offset_file_map)
+    }
+
 
     pub async fn get_topic_partition_metadata(&self, topic_name: &str, partition: Partition) -> anyhow::Result<TopicPartitionMetadata, FdbBindingError> {
         let topic_partition_metada = self.db.run(|trx, _maybe_committed| async move {
             // check if topic and partition for that topic exists
-
             let high_watermark_key = self.subspace.get_topic_partition_high_watermark_key(topic_name, partition);
 
             trx.get(&high_watermark_key, false).await?.expect("topic or topic partition does not exist");
@@ -193,11 +233,12 @@ impl StreamingLayer {
             let topic_partition_metadata = self.get_topic_partition_metadata_with_transaction(trx, &batch_statistic.topic_name, batch_statistic.partition).await?;
 
             let high_watermark_key = self.subspace.get_topic_partition_high_watermark_key(&batch_statistic.topic_name, batch_statistic.partition);
-            let offset_start_key = self.subspace.get_offset_start_key(&batch_statistic.topic_name, batch_statistic.partition, topic_partition_metadata.high_watermark);
+            let offset_start_key = self.subspace.create_topic_partition_offset_file_key(&batch_statistic.topic_name, batch_statistic.partition, topic_partition_metadata.high_watermark);
             trx.set(&offset_start_key, path.as_bytes());
             Self::increment(&trx, &high_watermark_key, batch_statistic.num_messages as i64);
         }
 
+        let batch = batch.clone();
         info!("committed batch of size {}", batch.len());
         Ok(())
     }
@@ -213,8 +254,9 @@ impl StreamingLayer {
 
     #[inline]
     async fn read_high_watermark(trx: &Transaction, key: &[u8]) -> Result<i64, FdbError> {
+        // Don't change snapshot to true unless you know what you are doing
         let raw_counter = trx
-            .get(key, true)
+            .get(key, false)
             .await?;
 
         match raw_counter {
