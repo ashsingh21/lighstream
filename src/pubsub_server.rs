@@ -10,6 +10,7 @@ use dotenv;
 
 use bytes::Bytes;
 use ractor::rpc::CallResult;
+use tokio::sync::mpsc;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
@@ -81,13 +82,26 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn start_server() -> anyhow::Result<()> {
-    let addr = "[::1]:50051".parse()?;
-    let pubsub_service = Agent::try_new(50).await?;
+    let addrs = ["[::1]:50055", "[::1]:50056"];
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    for addr in &addrs {
+        let addr = addr.parse()?;
+        let tx = tx.clone();
+        let pubsub_service = Agent::try_new(10).await?;
 
-    Server::builder()
+        let server = Server::builder()
         .add_service(PubSubServer::new(pubsub_service))
-        .serve(addr)
-        .await?;
+        .serve(addr);
+
+        tokio::spawn(async move {
+            if let Err(e) = server.await {
+                eprintln!("Error = {:?}", e);
+            }
+
+            tx.send(()).unwrap();
+        });
+    }
+    rx.recv().await;
 
     Ok(())
 }

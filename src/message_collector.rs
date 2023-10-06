@@ -254,8 +254,12 @@ impl MessageCollectorFactory {
             ..Default::default()
         };
 
+        let uuid = uuid::Uuid::new_v4().to_string();
+
+        let actor_name = format!("message_collector_factory_{}", uuid);
+
         Actor::spawn(
-            Some("message_collector_factory".to_string()),
+            Some(actor_name),
             factory_definition,
             Box::new(MessageCollectorWorkerBuilder {}),
         )
