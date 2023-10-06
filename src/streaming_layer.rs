@@ -69,14 +69,42 @@ impl StreamingLayer {
     }
 
     /// creates 10 partitions by default
-    pub async fn create_topic<T>(&self, topic_name: T, num_paritions: Option<Partition>) -> anyhow::Result<()> 
-    where T: Into<&'static str> {
+    pub async fn create_topic<T, O>(&self, topic_name: T, num_paritions: O) -> anyhow::Result<()> 
+    where T: Into<&'static str>,
+          O: Into<Option<Partition>> {
         let topic_name: &str = topic_name.into();
-        let num_partitions = num_paritions.unwrap_or(DEFAULT_NUM_PARTITIONS);
+        let num_partitions: Partition = {
+            let num_partitions: Option<Partition> = num_paritions.into();
+            num_partitions.unwrap_or(DEFAULT_NUM_PARTITIONS)
+        };
 
         // FIXME: check if topic already exists?
         self.db.run(|trx, _maybe_committed| async move {
             for partition in 0..num_partitions {
+                let topic_partition_high_watermark_key = self.subspace.get_topic_partition_high_watermark_key(topic_name, partition);
+                Self::increment(&trx, &topic_partition_high_watermark_key, 0);
+            }
+
+            Ok(())
+        }).await?;
+
+        Ok(())
+    }
+
+    pub async fn add_partitions<T, O>(&self, topic_name: T, num_paritions: O) -> anyhow::Result<()> 
+    where T: Into<&'static str>,
+          O: Into<Option<Partition>> {
+        // FIXE: check if topic already exists?
+        let topic_name: &str = topic_name.into();
+        let num_partitions: Partition = {
+            let num_partitions: Option<Partition> = num_paritions.into();
+            num_partitions.unwrap_or(DEFAULT_NUM_PARTITIONS)
+        };
+
+        let current_partitions = self.get_topic_metadata(topic_name).await?.len() as Partition;
+        // add more partitions starting from current total partitions
+        self.db.run(|trx, _maybe_committed| async move {
+            for partition in current_partitions..(current_partitions + num_partitions) {
                 let topic_partition_high_watermark_key = self.subspace.get_topic_partition_high_watermark_key(topic_name, partition);
                 Self::increment(&trx, &topic_partition_high_watermark_key, 0);
             }

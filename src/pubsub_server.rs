@@ -82,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn start_server() -> anyhow::Result<()> {
-    let addrs = ["[::1]:50055", "[::1]:50056"];
+    let addrs = ["[::1]:50050", "[::1]:50051"];
     let (tx, mut rx) = mpsc::unbounded_channel();
     for addr in &addrs {
         let addr = addr.parse()?;

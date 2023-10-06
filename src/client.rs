@@ -48,17 +48,19 @@ async fn main() -> anyhow::Result<()> {
     // }
 
     let streaming_layer = StreamingLayer::new();
-    let files_to_consume = streaming_layer.get_files_to_consume("clickstream", 0, 0, Some(10)).await?;
+    streaming_layer.add_partitions("click_actions", 300).await?;
+    multi_client().await?;
+    // let files_to_consume = streaming_layer.get_files_to_consume("clickstream", 0, 0, Some(10)).await?;
 
-    // println!("files to consume: {:?}", files_to_consume);
+    // // println!("files to consume: {:?}", files_to_consume);
 
-    let s3_file_reader = s3::S3FileReader::try_new("topics_data/topic_data_batch_1696563146538454713", op).await?;
+    // let s3_file_reader = s3::S3FileReader::try_new("topics_data/topic_data_batch_1696563146538454713", op).await?;
 
-    let topic_data = s3_file_reader.get_topic_data("clickstream", 0).await?;
+    // let topic_data = s3_file_reader.get_topic_data("clickstream", 0).await?;
 
-    for data in topic_data.messages.iter() {
-        println!("{:?}", String::from_utf8(data.key.clone()));
-    }
+    // for data in topic_data.messages.iter() {
+    //     println!("{:?}", String::from_utf8(data.key.clone()));
+    // }
 
     Ok(())
 
@@ -122,13 +124,13 @@ async fn async_produce() -> Result<(), Box<dyn std::error::Error>> {
             task_set = tokio::task::JoinSet::new();
         }
 
-        let topic_name = format!("test_topic_{}", n % 5);
+        let topic_name = "click_actions";
         let kb_50 = 50;
         let random_vec_bytes: Vec<u8> = (0..kb_50).map(|_| rand::random::<u8>()).collect();
         let request = tonic::Request::new(PublishRequest {
             topic_name: topic_name.into(),
             message: random_vec_bytes,
-            partition: n % 10
+            partition: n % 100
         });
 
 
@@ -143,8 +145,8 @@ async fn async_produce() -> Result<(), Box<dyn std::error::Error>> {
 
 
 async fn multi_client() -> anyhow::Result<()> {
-    let e1 = Endpoint::from_static("http://[::1]:50055");
-    let e2 = Endpoint::from_static("http://[::1]:50056");
+    let e1 = Endpoint::from_static("http://[::1]:50050");
+    let e2 = Endpoint::from_static("http://[::1]:50051");
 
     let (channel, rx) = Channel::balance_channel(10);
     let client = PubSubClient::new(channel);
@@ -177,7 +179,7 @@ async fn multi_client() -> anyhow::Result<()> {
         let request = tonic::Request::new(PublishRequest {
             topic_name: "clickstream".into(),
             message: random_vec_bytes,
-            partition:  n % 10
+            partition:  n % 400
         });
         let mut client = client.clone();
 
@@ -186,6 +188,5 @@ async fn multi_client() -> anyhow::Result<()> {
         });
        
         n += 1;
-
     }
 }
