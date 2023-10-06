@@ -20,7 +20,7 @@ use pubsub::{PublishRequest, PublishResponse};
 use tracing::info;
 use crate::agent::{Agent, Command};
 use crate::pubsub::pub_sub_server::PubSubServer;
-use crate::streaming_layer::StreamingLayer;
+
 
 #[tonic::async_trait]
 impl PubSub for Agent {

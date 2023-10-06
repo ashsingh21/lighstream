@@ -11,11 +11,8 @@ use s3_file::{FileMetadata, TopicMetadata, TopicData, TopicMessage};
 
 use std::{sync::Arc, io::{Write, Read}, collections::HashMap, time::UNIX_EPOCH};
 
-use opendal::{services, Operator, layers::LoggingLayer};
+use opendal::Operator;
 
-use human_bytes::human_bytes;
-
-use flate2::write::GzEncoder;
 
 use crate::{message_collector, streaming_layer::Partition};
 

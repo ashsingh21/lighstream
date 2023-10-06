@@ -11,7 +11,6 @@ use crate::{
     message_collector::{MessageCollectorFactory,MessageCollectorWorkerOperation, Message,}, streaming_layer::Partition,
 };
 
-use crate::streaming_layer::StreamingLayer;
 
 use bytes::Bytes;
 use ractor::{
@@ -28,8 +27,6 @@ type MessageFactory = (ActorRef<FactoryMessage<String, MessageCollectorWorkerOpe
 
 
 pub struct Agent {
-    streaming_db: StreamingLayer,
-
     /// FIXME: Add drop method and stop factory there
     /// message_collector_factory.stop(None);
     /// message_collector_factory_handle.await.unwrap();
@@ -40,10 +37,8 @@ impl Agent {
     pub async fn try_new(concurrency: usize) -> anyhow::Result<Self> {
         let message_factory =
             MessageCollectorFactory::create(concurrency).await;
-
-        let streaming_db = StreamingLayer::new();
         
-        Ok(Self { message_factory, streaming_db })
+        Ok(Self { message_factory })
     }
 
     pub async fn send(&self, command: Command) -> anyhow::Result<CallResult<usize>> {

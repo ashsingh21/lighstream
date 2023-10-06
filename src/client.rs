@@ -4,9 +4,8 @@ mod s3;
 mod streaming_layer;
 
 use std::sync::Arc;
-use std::{thread, string};
+use std::thread;
 
-use bytes::Bytes;
 use opendal::layers::LoggingLayer;
 use opendal::{services, Operator};
 use pubsub::pub_sub_client::PubSubClient;
@@ -14,7 +13,6 @@ use pubsub::PublishRequest;
 use tonic::transport::{Endpoint, Channel};
 use tower::discover::Change;
 
-use crate::message_collector::Message;
 use crate::streaming_layer::StreamingLayer;
 
 pub mod pubsub {
