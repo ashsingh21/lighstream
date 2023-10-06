@@ -1,9 +1,8 @@
 mod agent;
 mod message_collector;
 mod metadata;
-mod producer;
 mod s3;
-mod database;
+mod streaming_layer;
 
 use std::{sync::Arc, thread, time::Duration};
 
@@ -86,7 +85,7 @@ async fn produce_msg(tx: Sender<Command>) {
         let bytes = Bytes::from("hello world");
         let tx = tx.clone();
         tokio::spawn( async move {
-            tx.send(Command::Send { topic_name, message: bytes }).await.expect("could not send message");
+            tx.send(Command::Send { topic_name, message: bytes, parition: 1 }).await.expect("could not send message");
         });
         n += 1;
     }

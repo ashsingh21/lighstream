@@ -28,6 +28,10 @@ dotenv = "0.15.0"
 opendal = "0.40.0"
 human_bytes = "0.4.3"
 flate2 = "1.0.27"
+uuid = "1.4.1"
+
+# [profile.release]
+# lto = true
 
 [[bin]] # Bin to run the HelloWorld gRPC server
 name = "lightstream"
@@ -41,9 +45,17 @@ path = "src/pubsub_server.rs"
 name = "client"
 path = "src/client.rs"
 
-[[bin]]
-name = "metadata"
-path = "src/metadata_client.rs"
+# [[bin]]
+# name = "metadata"
+# path = "src/metadata_client.rs"
+
+# [[bin]]
+# name = "compactor"
+# path = "src/compactor.rs"
+
+# [[bin]]
+# name = "streaming-layer"
+# path = "src/streaming_layer.rs"
 
 
 [build-dependencies]

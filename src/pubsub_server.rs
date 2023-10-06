@@ -1,25 +1,26 @@
 mod agent;
 mod message_collector;
-mod metadata;
 mod s3;
+mod streaming_layer;
 mod pubsub {
     tonic::include_proto!("pubsub");
 }
 
+use dotenv;
+
 use bytes::Bytes;
 use ractor::rpc::CallResult;
+use tokio::sync::mpsc;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
 use pubsub::pub_sub_server::PubSub;
 use pubsub::{PublishRequest, PublishResponse};
 
-
-use dotenv;
-
 use tracing::info;
 use crate::agent::{Agent, Command};
 use crate::pubsub::pub_sub_server::PubSubServer;
+
 
 #[tonic::async_trait]
 impl PubSub for Agent {
@@ -29,6 +30,7 @@ impl PubSub for Agent {
         match self.send(Command::Send {
             topic_name: request.topic_name,
             message: Bytes::from(request.message),
+            parition: request.partition,
         }).await {
             Ok(call_result) => {
                 // FIXME: this is leaking message factory error codes
@@ -56,6 +58,8 @@ impl PubSub for Agent {
     }
 }
 
+
+// TODO: test streaming layer
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
@@ -72,13 +76,32 @@ async fn main() -> anyhow::Result<()> {
 
     let _guard = unsafe { foundationdb::boot() };
     
-    let addr = "[::1]:50051".parse()?;
-    let pubsub_service = Agent::try_new(50).await?;
+    start_server().await?;
 
-    Server::builder()
+    Ok(())
+}
+
+async fn start_server() -> anyhow::Result<()> {
+    let addrs = ["[::1]:50050", "[::1]:50051"];
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    for addr in &addrs {
+        let addr = addr.parse()?;
+        let tx = tx.clone();
+        let pubsub_service = Agent::try_new(10).await?;
+
+        let server = Server::builder()
         .add_service(PubSubServer::new(pubsub_service))
-        .serve(addr)
-        .await?;
+        .serve(addr);
+
+        tokio::spawn(async move {
+            if let Err(e) = server.await {
+                eprintln!("Error = {:?}", e);
+            }
+
+            tx.send(()).unwrap();
+        });
+    }
+    rx.recv().await;
 
     Ok(())
 }

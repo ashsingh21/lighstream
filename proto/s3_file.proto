@@ -8,19 +8,19 @@ message FileMetadata {
 
 message TopicMetadata {
     string name = 1;
-    uint64 watermark_start_offset = 2;
-    uint64 file_offset_start = 3;
-    uint64 file_offset_end = 4;
-    uint32 num_messages = 5;
+    uint32 partition = 2;
+    uint64 file_offset_start = 4;
+    uint64 file_offset_end = 5;
+    uint32 num_messages = 6;
 }
 
 message TopicData {
     string topic_name = 1;
-    repeated TopicMessage messages = 2;
+    uint32 partition = 2;
+    repeated TopicMessage messages = 3;
 }
 
 message TopicMessage {
-    uint64 offset = 1;
     uint64 timestamp = 2;
     bytes key = 3;
     bytes value = 4;
