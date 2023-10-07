@@ -8,7 +8,7 @@ pub mod pubsub {
 }
 
 use crate::{
-    message_collector::{MessageCollectorFactory,MessageCollectorWorkerOperation, Message,}, streaming_layer::Partition,
+    message_collector::{MessageCollectorFactory,MessageCollectorWorkerOperation, Message,}, streaming_layer::Partition, pubsub::PublishRequest,
 };
 
 
@@ -21,6 +21,7 @@ use ractor::{
 pub enum Command {
     // TODO: send commmand should also contain at most once or at least once semantics
     Send { topic_name: String, message: Bytes, parition: Partition },
+    SendBatch { requests: Vec<PublishRequest> },
 }
 
 type MessageFactory = (ActorRef<FactoryMessage<String, MessageCollectorWorkerOperation>>, JoinHandle<()>);
@@ -61,8 +62,21 @@ impl Agent {
                 }, Some(Duration::from_millis(5000))).await?;
                 return Ok(response_code);
             },
+            Command::SendBatch { requests } => {
+                debug!("got send batch command...");
+                let response_code = self.message_factory.0.call(|reply_port| {
+                    FactoryMessage::Dispatch(Job {
+                        key: "batch_asas".into(),
+                        msg: MessageCollectorWorkerOperation::CollectBatch(
+                            requests,
+                            reply_port,
+                        ),
+                        options: JobOptions::default(),
+                    })
+                }, Some(Duration::from_millis(5000))).await?;
+                return Ok(response_code);
+            }
         }
     }
-
 }
 

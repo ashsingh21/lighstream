@@ -1,3 +1,8 @@
+pub mod pubsub {
+    tonic::include_proto!("pubsub");
+}
+
+
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -9,7 +14,7 @@ use ractor::{
 };
 use tracing::{debug, info};
 
-use crate::{s3, streaming_layer::{Partition, StreamingLayer}};
+use crate::{s3, streaming_layer::{Partition, StreamingLayer}, pubsub::PublishRequest};
 
 // Reference https://github.com/slawlor/ractor/blob/000fbb63e7c5cb9fa522535565d1d74c48df7f8e/ractor/src/factory/tests/mod.rs#L156
 
@@ -41,6 +46,7 @@ pub type ErrorCode = usize;
 pub enum MessageCollectorWorkerOperation {
     Flush,
     Collect(Message, RpcReplyPort<ErrorCode>),
+    CollectBatch(Vec<PublishRequest>, RpcReplyPort<ErrorCode>),
 }
 
 struct MessageState {
@@ -205,6 +211,19 @@ impl Actor for MessageCollectorWorker {
                                 }
                             });
                         }
+                    }
+                    MessageCollectorWorkerOperation::CollectBatch(messages, reply_port) => {
+                        debug!(
+                            "worker {} got collect batch",
+                            state.worker_state.wid
+                        );
+
+                        for message in messages {
+                            let message = Message::new(message.topic_name.clone(), message.message.clone().into(), message.partition);
+                            state.message_state.push( message.clone() );
+                            state.message_state.s3_file.insert(&message.topic_name, message.partition, message.clone());
+                        }
+                        state.message_state.reply_ports.push(reply_port);
                     }
                 }
 

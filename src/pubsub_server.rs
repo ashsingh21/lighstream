@@ -6,53 +6,51 @@ mod pubsub {
     tonic::include_proto!("pubsub");
 }
 
+use pubsub::PublishBatchRequest;
+use pubsub::pub_sub_server::PubSub;
 use dotenv;
 
-use bytes::Bytes;
 use ractor::rpc::CallResult;
 use tokio::sync::mpsc;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
 
-use pubsub::pub_sub_server::PubSub;
-use pubsub::{PublishRequest, PublishResponse};
+
 
 use tracing::info;
 use crate::agent::{Agent, Command};
+use crate::pubsub::PublishResponse;
 use crate::pubsub::pub_sub_server::PubSubServer;
 
 
 #[tonic::async_trait]
 impl PubSub for Agent {
-    async fn publish(&self, request: Request<PublishRequest>) -> Result<Response<PublishResponse>, Status> {
-        let request = request.into_inner();
+    async fn publish(&self, batch_request: Request<PublishBatchRequest>) -> Result<Response<PublishResponse>, Status> {
+        let request = batch_request.into_inner();
 
-        match self.send(Command::Send {
-            topic_name: request.topic_name,
-            message: Bytes::from(request.message),
-            parition: request.partition,
-        }).await {
-            Ok(call_result) => {
-                // FIXME: this is leaking message factory error codes
-                // fix it by creating agent status codes
-                match call_result {
-                    CallResult::Success(code) => {
-                        let reply = pubsub::PublishResponse {
-                            code: code as i32,
-                            description: "OK".into(),
-                        };
-                        Ok(Response::new(reply))
-                    }
-                    CallResult::Timeout => {
-                        return Err(Status::deadline_exceeded("message factory deadline timeout"));
-                    }
+        match self.send(Command::SendBatch { requests: request.requests }).await {
+            Ok(call_code) => {
+                match call_code {
+                    CallResult::Success(result) => {
+                        info!("successfully sent batch");
+                        return Ok(Response::new(PublishResponse {
+                            code: 0,
+                            description: "success".to_string(),
+                        }));
+                    },
                     CallResult::SenderError => {
-                        return Err(Status::internal("sender error"));
+                        info!("error sending batch");
+                        return Err(Status::internal("error sending batch"));
+                    },
+                    CallResult::Timeout => {
+                        info!("timeout while sending batch");
+                        return Err(Status::internal("timeout while sending batch"));
                     }
                 }
-            }
-            Err(err) => {
-                return Err(Status::internal(format!("could not send message: {}", err)));
+            },
+            Err(e) => {
+                info!("error sending batch: {:?}", e);
+                return Err(Status::internal("error sending batch"));
             }
         }
     }
@@ -87,7 +85,7 @@ async fn start_server() -> anyhow::Result<()> {
     for addr in &addrs {
         let addr = addr.parse()?;
         let tx = tx.clone();
-        let pubsub_service = Agent::try_new(10).await?;
+        let pubsub_service = Agent::try_new(15).await?;
 
         let server = Server::builder()
         .add_service(PubSubServer::new(pubsub_service))
