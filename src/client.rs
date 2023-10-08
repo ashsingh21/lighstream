@@ -2,6 +2,7 @@ mod agent;
 mod message_collector;
 mod s3;
 mod streaming_layer;
+mod producer;
 
 use std::sync::Arc;
 
@@ -35,10 +36,29 @@ async fn main() -> anyhow::Result<()> {
 
     let streaming_layer = StreamingLayer::new();
     streaming_layer.add_partitions("clickstream", 300).await?;
-    multi_client().await?;
+    producer_test().await?;
 
     Ok(())
 
+}
+
+async fn producer_test() -> anyhow::Result<()> {
+    let mut producer = producer::Producer::try_new("http://[::1]:50051").await?;
+
+    let mut record_batch = Vec::new();
+
+    for i in 0..10 {
+        let topic_name = format!("test_topic_0");
+        let kb_50 = 50 * 1024; // 50kb
+
+        let random_string = (0..kb_50).map(|_| rand::random::<char>()).collect::<String>();
+
+        record_batch.push((topic_name, i % 10, random_string.into_bytes()));
+    }
+
+    let response = producer.send(record_batch).await?;
+    println!("response from producer: {:?}", response);
+    Ok(())
 }
 
 async fn multi_client() -> anyhow::Result<()> {

@@ -2,6 +2,7 @@ mod agent;
 mod message_collector;
 mod s3;
 mod streaming_layer;
+mod producer;
 mod pubsub {
     tonic::include_proto!("pubsub");
 }
