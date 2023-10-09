@@ -58,18 +58,7 @@ struct FileCompactor {
 }
 
 impl FileCompactor {
-    fn try_new() -> anyhow::Result<Self> {
-        let mut builder = services::S3::default();
-        builder.access_key_id(&std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID not set"));
-        builder.secret_access_key(&std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"));
-        builder.bucket("lightstream");
-        builder.endpoint("http://localhost:9000");
-        builder.region("us-east-1");
-    
-        let op = Arc::new(opendal::Operator::new(builder)?
-            .layer(LoggingLayer::default())
-            .finish());
-
+    fn try_new(op: Arc<opendal::Operator>) -> anyhow::Result<Self> {
         let streaming_layer = streaming_layer::StreamingLayer::new();
 
         Ok(Self {
@@ -121,42 +110,6 @@ impl FileCompactor {
         }
 
         Ok(())
-    }
-
-    async fn merge_files(&self, files: &[String]) -> anyhow::Result<BytesMut> {
-        let mut file_buffer = bytes::BytesMut::new();
-        let mut topics_metadata = Vec::new();
-
-        for file_path in files {
-            let s3_file_reader = s3::S3FileReader::try_new(&file_path, self.op.clone()).await?;
-            let topics_data_bytes = s3_file_reader.get_topics_data_bytes().await?;
-            file_buffer.extend_from_slice(&topics_data_bytes);
-
-            let file_metadata = s3_file_reader.file_metadata;
-            for topic_metadata in file_metadata.topics_metadata {
-                topics_metadata.push(S3TopicMetadata {
-                    name: topic_metadata.name,
-                    partition: topic_metadata.partition,
-                    file_offset_start: topic_metadata.file_offset_start + file_buffer.len() as u64,
-                    file_offset_end: topic_metadata.file_offset_end + file_buffer.len() as u64,
-                    num_messages: topic_metadata.num_messages,
-                });
-            }
-        }
-
-        let file_metadata = s3_file::FileMetadata {
-            topics_metadata,
-            topic_metadata_bytes_length: file_buffer.len() as u64,
-        };
-
-        let file_metadata = file_metadata.encode_to_vec();
-        let file_metadata_len = file_metadata.len() as u32;
-        file_buffer.extend_from_slice(&file_metadata);
-        
-        file_buffer.put_u32_le(file_metadata_len);
-        file_buffer.put(MAGIC_BYTES);
-
-        Ok(file_buffer)
     }
 }
 

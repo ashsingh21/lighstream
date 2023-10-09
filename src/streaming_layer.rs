@@ -26,6 +26,8 @@ struct StreamingLayerSubspace {
     topics_files: Subspace,
     /// topic_partition_high_watermark/{topic_name}/{partition_id} = {high_watermark}
     topic_partition_high_watermark: Subspace,
+    /// file_compaction/{filename}/{topic_start_offset_key} = ''
+    file_compaction: Subspace,
 }
 
 impl StreamingLayerSubspace {
@@ -33,7 +35,13 @@ impl StreamingLayerSubspace {
         Self { 
             topics_files: Subspace::from("topics_files"),
             topic_partition_high_watermark: Subspace::from("topic_partition_high_watermark"),
+            file_compaction: Subspace::from("file_compaction"),
         }
+    }
+
+    #[inline]
+    fn get_file_compaction_key(&self, filename: &str, topic_start_offset_key: &[u8]) -> Vec<u8> {
+        self.file_compaction.subspace(&filename).pack(&topic_start_offset_key)
     }
 
     #[inline]
@@ -262,8 +270,11 @@ impl StreamingLayer {
 
             let high_watermark_key = self.subspace.get_topic_partition_high_watermark_key(&batch_statistic.topic_name, batch_statistic.partition);
             let offset_start_key = self.subspace.create_topic_partition_offset_file_key(&batch_statistic.topic_name, batch_statistic.partition, topic_partition_metadata.high_watermark);
+            let compaction_key = self.subspace.get_file_compaction_key(path, &offset_start_key);
+
             trx.set(&offset_start_key, path.as_bytes());
             Self::increment(&trx, &high_watermark_key, batch_statistic.num_messages as i64);
+            trx.set(&compaction_key, &[]);
         }
 
         info!("committed batch of size {}", batch.len());
