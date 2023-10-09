@@ -3,7 +3,9 @@ package s3_file;
 
 
 message FileMetadata {
-    repeated SectionMetadata sections_metadata = 1;
+    // The length of sections in bytes.
+    uint64 sections_length = 1;
+    repeated SectionMetadata sections_metadata = 2;
 }
 
 message SectionMetadata {

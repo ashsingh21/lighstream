@@ -30,6 +30,62 @@ pub struct BatchTopicStatistic {
 
 pub type BatchStatistics = Vec<BatchTopicStatistic>;
 
+pub struct FileMerger {
+    s3_operator: Arc<Operator>,
+}
+
+impl FileMerger {
+    pub fn new(s3_operator: Arc<Operator>) -> Self {
+        Self { s3_operator }
+    }
+
+    pub async fn merge(&self, files: Vec<String>) -> anyhow::Result<String> {
+        let mut file_buffer = Vec::new();
+
+        // stuff for file metadata
+        let mut sections_metadata = Vec::new();
+        let mut file_sections_length: u64 = 0;
+
+        for file in files {
+            let s3_file_reader = S3FileReader::try_new(&file, self.s3_operator.clone()).await?;
+            let sections_len = s3_file_reader.file_metadata.sections_length;
+
+            let range = std::ops::Range {
+                start: 0,
+                end: sections_len,
+            };
+
+            let section_bytes = S3FileReader::get_bytes_for_range(&file, self.s3_operator.clone(), range).await?;
+            file_buffer.put(&section_bytes[..]);
+
+            for metadata in s3_file_reader.file_metadata.sections_metadata.into_iter() {
+                let mut meta = metadata.clone();
+                meta.start_offset += file_sections_length;
+                meta.end_offset += file_sections_length;
+                sections_metadata.push(meta);
+            }
+
+            file_sections_length += sections_len;
+        }
+
+        let file_metadata = FileMetadata { sections_length: file_sections_length, sections_metadata };
+
+        let file_metadata_bytes = file_metadata.encode_to_vec();
+        let file_metadata_len = file_metadata_bytes.len() as u32;
+
+        file_buffer.put(&file_metadata_bytes[..]);
+        file_buffer.put_u32_le(file_metadata_len);
+        file_buffer.put(MAGIC_BYTES);
+
+        let path = create_filepath();
+        self.s3_operator.write(&path, file_buffer).await?;
+    
+        Ok(path)
+    }
+}
+
+
+
 pub struct S3File {
     pub topic_data: HashMap<(TopicName, Partition), Messages>,
     file_buffer: BytesMut,
@@ -150,7 +206,7 @@ impl S3File {
 
         let section_metadata = SectionMetadata { messages_metadata: topics_metadata, start_offset: 0, end_offset: self.file_buffer.len() as u64 };
 
-        let file_metadata = FileMetadata { sections_metadata: vec![section_metadata] }.encode_to_vec();
+        let file_metadata = FileMetadata { sections_length: self.file_buffer.len() as u64,  sections_metadata: vec![section_metadata] }.encode_to_vec();
         let file_metadata_len = file_metadata.len() as u32;
 
         self.file_buffer.put(&file_metadata[..]);
@@ -231,16 +287,20 @@ impl S3FileReader {
     }
 
     fn get_messages_metadata(&self, topic_name: &str, partition: Partition, logical_start_offset: u64, logical_message_offset: u32) -> Option<MessagesMetadata> {
+        // for each section if same topic and parition then increment the number
+        let mut curr_count = HashMap::new();
         for section in self.file_metadata.sections_metadata.iter() {
             for message_metadata in &section.messages_metadata {
+                let key = (message_metadata.name.clone(), message_metadata.partition);
                 if message_metadata.name == topic_name && message_metadata.partition == partition {
-                    if message_metadata.num_messages as u64 + logical_start_offset > logical_message_offset as u64 {
+                    if curr_count.get(&key).unwrap_or(&0) + message_metadata.num_messages as u64 + logical_start_offset > logical_message_offset as u64 {
                         let mut meta = message_metadata.clone();
                         meta.messages_offset_start += section.start_offset;
                         meta.messages_offset_end += section.start_offset;
                         return Some(meta);
                     }
                 }
+                curr_count.insert(key, message_metadata.num_messages as u64);
             }
         }
         None
@@ -263,7 +323,6 @@ mod tests {
     use super::*;
     use std::{sync::Arc, any};
     use opendal::{Operator, services, layers::LoggingLayer};
-    use tokio::runtime::Runtime;
 
     // TODO: test tuple
 
@@ -387,6 +446,83 @@ mod tests {
         assert!(messages.len() == 1);
         assert!(messages[0].key == "test-key".as_bytes());
         assert!(messages[0].value == "test-message-5".as_bytes());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_file_merger() -> anyhow::Result<()> {
+        let op = create_operator().expect("failed to create operator");
+        let mut s3_file = S3File::new(op.clone());
+
+        let topic_name1 = "test-topic";
+        let partition1 = 0;
+
+        for i in 0..2 {
+            let message = message_collector::Message {
+                data: Bytes::from(format!("test-message-{}-{}", topic_name1, i)),
+                partition: partition1,
+                topic_name: topic_name1.to_string(),
+            };
+            s3_file.insert_message(topic_name1, partition1, message);
+        }
+
+        let (filename, _) = s3_file.upload_and_clear().await?;
+
+        let mut s3_file = S3File::new(op.clone());
+
+        let topic_name2 = "test-topic-2";
+        let partition2 = 2;
+
+        for i in 0..2 {
+            let message = message_collector::Message {
+                data: Bytes::from(format!("test-message-{}-{}", topic_name2, i)),
+                partition: partition2,
+                topic_name: topic_name2.to_string(),
+            };
+            s3_file.insert_message(topic_name2, partition2, message);
+        }
+
+        let (filename2, _) = s3_file.upload_and_clear().await?;
+
+        for i in 2..4 {
+            let message = message_collector::Message {
+                data: Bytes::from(format!("test-message-{}-{}", topic_name2, i)),
+                partition: partition2,
+                topic_name: topic_name2.to_string(),
+            };
+            s3_file.insert_message(topic_name2, partition2, message);
+        }
+
+        let (filename3, _) = s3_file.upload_and_clear().await?;
+
+
+        let file_merger = FileMerger::new(op.clone());
+        let merged_file = file_merger.merge(vec![filename, filename2, filename3]).await?;
+
+        let s3_file_reader = S3FileReader::try_new(&merged_file, op.clone()).await?;
+
+        let topic_data = s3_file_reader.get_topic_data(topic_name1, partition1, 0, 0).await?.expect("failed to get topic data");
+        let messages = topic_data.messages;
+
+        assert!(messages.len() == 2);
+
+        assert!(messages[0].key == "test-key".as_bytes());
+        assert!(messages[0].value == format!("test-message-{}-0", topic_name1).as_bytes());
+
+        assert!(messages[1].key == "test-key".as_bytes());
+        assert!(messages[1].value == format!("test-message-{}-1", topic_name1).as_bytes());
+
+        let topic_data = s3_file_reader.get_topic_data(topic_name2, partition2, 0, 3).await?.expect("failed to get topic data");
+        let messages = topic_data.messages;
+
+        assert!(messages.len() == 2);
+
+        assert!(messages[0].key == "test-key".as_bytes());
+        assert!(messages[0].value == format!("test-message-{}-2", topic_name2).as_bytes());
+
+        assert!(messages[1].key == "test-key".as_bytes());
+        assert!(messages[1].value == format!("test-message-{}-3", topic_name2).as_bytes());
 
         Ok(())
     }
