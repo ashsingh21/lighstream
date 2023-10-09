@@ -183,7 +183,7 @@ impl Actor for MessageCollectorWorker {
                         }
 
                         state.message_state.push(message.clone()); // FIXME: needed for transaction limit, should move transaction limit check to s3 file?
-                        state.message_state.s3_file.insert(&message.topic_name, message.partition, message.clone());
+                        state.message_state.s3_file.insert_message(&message.topic_name, message.partition, message.clone());
                         state.message_state.reply_ports.push(reply_port);
                     }
                     MessageCollectorWorkerOperation::Flush => {
@@ -221,7 +221,7 @@ impl Actor for MessageCollectorWorker {
                         for message in messages {
                             let message = Message::new(message.topic_name.clone(), message.message.clone().into(), message.partition);
                             state.message_state.push( message.clone() );
-                            state.message_state.s3_file.insert(&message.topic_name, message.partition, message.clone());
+                            state.message_state.s3_file.insert_message(&message.topic_name, message.partition, message.clone());
                         }
                         state.message_state.reply_ports.push(reply_port);
                     }

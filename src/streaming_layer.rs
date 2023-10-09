@@ -9,6 +9,9 @@ use crate::s3::BatchStatistics;
 
 pub type TopicMetadata = Vec<TopicPartitionMetadata>;
 pub type Offset = i64;
+pub type Partition = u32;
+
+const DEFAULT_NUM_PARTITIONS: Partition = 10;
 
 #[derive(Debug, Clone)]
 pub struct TopicPartitionMetadata {
@@ -57,9 +60,6 @@ pub struct StreamingLayer {
     subspace: StreamingLayerSubspace,
 }
 
-pub type Partition = u32;
-
-const DEFAULT_NUM_PARTITIONS: Partition = 10;
 
 impl StreamingLayer {
 
@@ -162,7 +162,7 @@ impl StreamingLayer {
         Ok(topic_partitions_metadata)
     } 
 
-    pub async fn get_files_to_consume(&self, topic_name: &str, partition: Partition, start_offset: Offset, end_offset: Option<Offset>) -> 
+    pub async fn get_files_for_offset_range(&self, topic_name: &str, partition: Partition, start_offset: Offset, end_offset: Option<Offset>) -> 
     anyhow::Result<BTreeMap<Offset, String>> {
         let trx = self.db.create_trx()?;
         let offset_start_key = {
@@ -266,7 +266,6 @@ impl StreamingLayer {
             Self::increment(&trx, &high_watermark_key, batch_statistic.num_messages as i64);
         }
 
-        let batch = batch.clone();
         info!("committed batch of size {}", batch.len());
         Ok(())
     }

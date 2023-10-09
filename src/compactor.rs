@@ -1,18 +1,18 @@
-use std::sync::Arc;
 mod s3_file {
     tonic::include_proto!("s3_file");
 }
-mod streaming_layer;
 
-use bytes::Bytes;
-use metadata::MetadataClient;
+use std::{sync::Arc, any};
+
+use bytes::{Bytes, BufMut, BytesMut};
 use opendal::{services, layers::LoggingLayer};
+use prost::Message;
 use tracing::info;
 
-mod agent;
-mod message_collector;
-mod metadata;
-mod s3;
+use crate::{streaming_layer::{self, TopicMetadata}, s3::{self, MAGIC_BYTES, BatchStatistics, create_filepath}};
+
+use self::s3_file::TopicMetadata as S3TopicMetadata;
+
 
 
 #[tokio::main]
@@ -26,7 +26,7 @@ async fn main() -> anyhow::Result<()> {
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber)?;
     let _guard = unsafe { foundationdb::boot() };
-    let compactor = Compactor::try_new()?;
+    let compactor = FileCompactor::try_new()?;
 
     let mut start_offset = 0;
     let limit = 10000;
@@ -42,16 +42,23 @@ async fn main() -> anyhow::Result<()> {
     // Ok(())
 }
 
-struct Compactor {
+pub struct TopicParitionCompactor {
+    topic: String,
+    partition: i32,
     op: Arc<opendal::Operator>,
-    metadata_client: metadata::FdbMetadataClient,
 }
 
-impl Compactor {
 
+impl TopicParitionCompactor {
+
+}
+struct FileCompactor {
+    op: Arc<opendal::Operator>,
+    streaming_layer: streaming_layer::StreamingLayer,
+}
+
+impl FileCompactor {
     fn try_new() -> anyhow::Result<Self> {
-        let metadata_client = metadata::FdbMetadataClient::try_new().expect("could not create metadata client");
-
         let mut builder = services::S3::default();
         builder.access_key_id(&std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID not set"));
         builder.secret_access_key(&std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"));
@@ -63,54 +70,93 @@ impl Compactor {
             .layer(LoggingLayer::default())
             .finish());
 
+        let streaming_layer = streaming_layer::StreamingLayer::new();
+
         Ok(Self {
             op,
-            metadata_client,
+            streaming_layer,
         })
-    }
+    } 
 
+    async fn compact(&self, topic_name: &str, partition: u32) -> anyhow::Result<()> {
+        // get all the files for first 100k messages
+        let start_offset = 0;
+        let limit = 100000;
 
-    // FIXME: This won't work with aribtray topics since we are using the topic name to find the files, right now I am fake traffic with 5 topics 0,1,2,3,4
-    async fn compact(&self, start_offset: i64, limit: i64) -> anyhow::Result<()> {
-        let mut files_to_compact = Vec::new();
+        let files = self.streaming_layer
+            .get_files_for_offset_range(
+                &topic_name, 
+                partition, 
+                start_offset, 
+                Some(start_offset + limit)
+            ).await?;
 
-        let sorted_map = self.metadata_client.get_files_to_consume("test_topic_0", start_offset, limit).await?;
+        let max_bytes: u64 = 200 * 1024 * 1024 * 10; // 200 MB
+        let mut total_bytes: u64 = 0;
 
-        for (_offset, path) in sorted_map.iter() {
-            // if file less than 10 MB the compact it
-            let stats = self.op.stat(path).await?;
+        let mut files_to_merge = Vec::new();
 
-            if stats.content_length() < 10 * 1024 * 1024 {
-                files_to_compact.push(path.clone());
-            }
-        }
+        for (start_offset, file_path) in files.iter() {
+            let file_stats = self.op.stat(file_path).await?;
 
-        let mut s3_file = s3::S3File::new(self.op.clone());
-        for file in files_to_compact.iter() {
-            let s3_reader = s3::S3FileReader::try_new(file.clone(), self.op.clone()).await.expect("could not create s3 reader");
+            if total_bytes + file_stats.content_length() > max_bytes {
+                let merged_file_bytes = self.merge_files(&files_to_merge[..]).await?;
+                let filepath = create_filepath();
 
-            for topic_metadata in s3_reader.file_metadata.topics_metadata.iter() {
-                for message in s3_reader.get_topic_data(&topic_metadata.name).await.expect("could not get topic data").messages.into_iter() {
-                    s3_file.insert_tuple(&topic_metadata.name, Bytes::from(message.key), Bytes::from(message.value));
+                match self.op.write(&filepath, merged_file_bytes).await {
+                    Ok(_) => {
+                        info!("merged file written to {}", filepath);
+                    },
+                    Err(e) => {
+                        info!("failed to write merged file to {}", filepath);
+                        anyhow::bail!(e);
+                    }
                 }
+                total_bytes = 0;
+                files_to_merge.clear();
+            } else {
+                total_bytes += file_stats.content_length();
+                files_to_merge.push(file_path.clone());
             }
         }
 
-        match s3_file.upload_and_clear().await {
-            Ok((path, batch_statistics)) => {
-                self.metadata_client.commit_batch(&path, &batch_statistics).await?;
-                for file in files_to_compact.iter() {
-                    self.op.delete(file).await?;
-                }
-            },
-            Err(e) => {
-                println!("error: {:?}", e);
-            }
-        }
         Ok(())
     }
 
+    async fn merge_files(&self, files: &[String]) -> anyhow::Result<BytesMut> {
+        let mut file_buffer = bytes::BytesMut::new();
+        let mut topics_metadata = Vec::new();
 
-    
+        for file_path in files {
+            let s3_file_reader = s3::S3FileReader::try_new(&file_path, self.op.clone()).await?;
+            let topics_data_bytes = s3_file_reader.get_topics_data_bytes().await?;
+            file_buffer.extend_from_slice(&topics_data_bytes);
+
+            let file_metadata = s3_file_reader.file_metadata;
+            for topic_metadata in file_metadata.topics_metadata {
+                topics_metadata.push(S3TopicMetadata {
+                    name: topic_metadata.name,
+                    partition: topic_metadata.partition,
+                    file_offset_start: topic_metadata.file_offset_start + file_buffer.len() as u64,
+                    file_offset_end: topic_metadata.file_offset_end + file_buffer.len() as u64,
+                    num_messages: topic_metadata.num_messages,
+                });
+            }
+        }
+
+        let file_metadata = s3_file::FileMetadata {
+            topics_metadata,
+            topic_metadata_bytes_length: file_buffer.len() as u64,
+        };
+
+        let file_metadata = file_metadata.encode_to_vec();
+        let file_metadata_len = file_metadata.len() as u32;
+        file_buffer.extend_from_slice(&file_metadata);
+        
+        file_buffer.put_u32_le(file_metadata_len);
+        file_buffer.put(MAGIC_BYTES);
+
+        Ok(file_buffer)
+    }
 }
 

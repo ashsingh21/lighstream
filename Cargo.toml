@@ -61,3 +61,6 @@ path = "src/client.rs"
 
 [build-dependencies]
 tonic-build = "0.10"
+
+[dev-dependencies]
+tempdir = "0.3.7"
