@@ -39,7 +39,7 @@ impl FileMerger {
         Self { s3_operator }
     }
 
-    pub async fn merge(&self, files: Vec<String>) -> anyhow::Result<String> {
+    pub async fn merge(&self, files: &[&str]) -> anyhow::Result<String> {
         let mut file_buffer = Vec::new();
 
         // stuff for file metadata
@@ -472,7 +472,7 @@ mod tests {
 
 
         let file_merger = FileMerger::new(op.clone());
-        let merged_file = file_merger.merge(vec![filename, filename2]).await?;
+        let merged_file = file_merger.merge(&vec![filename.as_str(), filename2.as_str()]).await?;
 
         let s3_file_reader = S3FileReader::try_new(&merged_file, op.clone()).await?;
 

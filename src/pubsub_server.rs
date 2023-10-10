@@ -8,6 +8,7 @@ mod pubsub {
 }
 mod compactor;
 
+use std::os::unix::thread;
 use std::sync::Arc;
 
 use opendal::layers::LoggingLayer;
@@ -76,14 +77,19 @@ async fn main() -> anyhow::Result<()> {
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber)?;
 
-    info!("starting up pub sub server");
-
     let _guard = unsafe { foundationdb::boot() };
 
-    start_compaction().await?;
-    
-    // start_server().await?;
-
+    let handle = std::thread::spawn(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(2)
+            .build()
+            .unwrap()
+            .block_on(start_compaction())
+    }); 
+  
+    start_server().await?;
+    handle.join().unwrap().expect("compaction failed");
     Ok(())
 }
 
@@ -101,22 +107,34 @@ async fn start_compaction() -> anyhow::Result<()> {
 
     let compactor = compactor::FileCompactor::try_new(op.clone()).expect("could not create compactor");
 
-    let s3_file_reader = s3::S3FileReader::try_new("topics_data/topic_data_batch_1696901266088622330", op.clone()).await?;
+    info!("starting compactor...");
 
-    for meta in s3_file_reader.file_metadata.sections_metadata {
-        println!("meta: {:?}", meta);
+    loop {
+        match compactor.compact().await {
+            Ok(_) => {
+                info!("going for next compaction...")
+            },
+            Err(e) => {
+                if e.to_string().contains("no files to compact") {
+                    info!("no files to waiting compact...");
+                } else {
+                    info!("compaction failed...");
+                    return Err(e);
+                }
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
     }
-
-    Ok(())
 }
 
 async fn start_server() -> anyhow::Result<()> {
+    info!("starting up pub sub server");
     let addrs = ["[::1]:50050", "[::1]:50051"];
     let (tx, mut rx) = mpsc::unbounded_channel();
     for addr in &addrs {
         let addr = addr.parse()?;
         let tx = tx.clone();
-        let pubsub_service = Agent::try_new(15).await?;
+        let pubsub_service = Agent::try_new(10).await?;
 
         let server = Server::builder()
         .add_service(PubSubServer::new(pubsub_service))

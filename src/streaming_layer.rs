@@ -21,7 +21,7 @@ pub struct TopicPartitionMetadata {
     pub low_watermark: i64,
 }
 
-struct StreamingLayerSubspace {
+pub struct StreamingLayerSubspace {
     /// topics_files/{topic_name}/{partition_id}/{start_offset} = {filename}
     topics_files: Subspace,
     /// topic_partition_high_watermark/{topic_name}/{partition_id} = {high_watermark}
@@ -40,7 +40,7 @@ impl StreamingLayerSubspace {
     }
 
     #[inline]
-    fn get_file_compaction_key(&self, filename: &str, topic_start_offset_key: &[u8]) -> Vec<u8> {
+    pub fn get_file_compaction_key(&self, filename: &str, topic_start_offset_key: &[u8]) -> Vec<u8> {
         self.file_compaction.subspace(&filename).pack(&topic_start_offset_key)
     }
 
@@ -64,8 +64,8 @@ impl StreamingLayerSubspace {
 }
 
 pub struct StreamingLayer {
-    db: foundationdb::Database,
-    subspace: StreamingLayerSubspace,
+    pub db: foundationdb::Database,
+    pub subspace: StreamingLayerSubspace,
 }
 
 
@@ -99,7 +99,35 @@ impl StreamingLayer {
         Ok(())
     }
 
-    pub async fn get_files_for_compaction(&self) -> anyhow::Result<multimap::MultiMap<String, (TopicName, Partition, Offset)>> {
+    /// returns first 10 files for compaction, if there are less than 10 files, it returns all files
+    /// you can just keep deleting keys and looping through this function until it returns an error
+    pub async fn get_first_files_for_compaction(&self) -> anyhow::Result<(multimap::MultiMap<String, Vec<u8>>, Vec<Vec<u8>>)> {
+        // FIXME: how to do batch compaction like only 10 files at a time?
+        let trx = self.db.create_trx()?;
+        let mut files_to_compact = multimap::MultiMap::new();
+        let mut keys_to_delete = Vec::new();
+
+        let file_compaction_subspace = self.subspace.file_compaction.clone();
+
+        let range_option = RangeOption::from(file_compaction_subspace.range());
+
+        let keys_values: Vec<FdbValue> = trx.get_ranges_keyvalues(range_option, false).try_collect().await?;
+
+        for key_value in keys_values {
+            keys_to_delete.push(key_value.key().to_vec());
+
+            let (filename, topic_start_offset_key): (String, Vec<u8>) = file_compaction_subspace.unpack(&key_value.key())?;
+            files_to_compact.insert(filename, topic_start_offset_key);
+        }
+
+        if files_to_compact.is_empty() {
+            return Err(anyhow::anyhow!("no files to compact"));
+        }
+
+        Ok((files_to_compact, keys_to_delete))
+    }
+
+    pub async fn get_files_for_compaction_decoded_topic_info(&self) -> anyhow::Result<multimap::MultiMap<String, (TopicName, Partition, Offset)>> {
         let trx = self.db.create_trx()?;
         let mut files_to_compact = multimap::MultiMap::new();
 

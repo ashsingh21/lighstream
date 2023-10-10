@@ -22,6 +22,7 @@ async fn main() -> anyhow::Result<()> {
     let subscriber = tracing_subscriber::FmtSubscriber::builder()
         .with_max_level(tracing::Level::INFO)
         .finish();
+
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber)?;
     let _guard = unsafe { foundationdb::boot() };
@@ -33,7 +34,7 @@ async fn main() -> anyhow::Result<()> {
 
 pub struct FileCompactor {
     op: Arc<opendal::Operator>,
-    streaming_layer: streaming_layer::StreamingLayer,
+    pub streaming_layer: streaming_layer::StreamingLayer,
 }
 
 impl FileCompactor {
@@ -47,19 +48,50 @@ impl FileCompactor {
     } 
 
     pub async fn compact(&self) -> anyhow::Result<()> {
-        let files = self.streaming_layer.get_files_for_compaction().await?;
+        let (files, file_keys_to_delete_after_compaction) = self.streaming_layer.get_first_files_for_compaction().await?;
 
         // gets as string
-        let k = files.keys().map(|file| file.clone()).collect::<Vec<String>>();
+        let filenames = files.keys().map(|file| file.as_str()).collect::<Vec<&str>>();
 
         let file_merger = s3::FileMerger::new(self.op.clone());
 
+        let new_file = file_merger.merge(&filenames).await?;
 
-        let new_file = file_merger.merge(k).await?;
+        let file_ref = &files;
+        let new_file_ref = new_file.as_str();
 
-        println!("new file: {:?}", new_file);
+        self.streaming_layer.db.run(|trx, _maybe_commited| async move {
+            for (_, offset_start_keys) in file_ref {
+                for offset_start_key in offset_start_keys {
+                    trx.set(offset_start_key, new_file_ref.as_bytes());
+                }
+            }
+            Ok(())
+        }).await?;
+
+        info!("offset_start_keys updated...");
+
+        for filename in filenames.iter() {
+            self.op.delete(filename).await?;
+        }
+
+        info!("old files deleted...");
+
+        let keys_to_clear_ref = &file_keys_to_delete_after_compaction[..];
+
+        // delete keys from filecompaction
+        self.streaming_layer.db.run(|trx, _maybe_commited| async move {
+            for key in keys_to_clear_ref {
+                println!("clearing key: {:?}", String::from_utf8(key.to_vec()));
+                trx.clear(key);
+            }
+            Ok(())
+        }).await?;
+
+        info!("compaction range cleared...");
 
         Ok(())
     }
+
 }
 
