@@ -29,6 +29,7 @@ opendal = "0.40.0"
 human_bytes = "0.4.3"
 flate2 = "1.0.27"
 uuid = "1.4.1"
+console-subscriber = "0.2.0"
 
 # [profile.release]
 # lto = true
@@ -60,3 +61,6 @@ path = "src/client.rs"
 
 [build-dependencies]
 tonic-build = "0.10"
+
+[dev-dependencies]
+tempdir = "0.3.7"

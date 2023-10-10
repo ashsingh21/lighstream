@@ -3,7 +3,11 @@ package pubsub;
 
 service PubSub {
     // Our SayHello rpc accepts HelloRequests and returns HelloReplies
-    rpc publish (PublishRequest) returns (PublishResponse);
+    rpc publish (PublishBatchRequest) returns (PublishResponse);
+}
+
+message PublishBatchRequest {
+    repeated PublishRequest requests = 1;
 }
 
 message PublishRequest {
@@ -13,6 +17,6 @@ message PublishRequest {
 }
 
 message PublishResponse {
-    int32 code = 1;
-    string description = 2;
+    int32 code = 3;
+    string description = 4;
 }

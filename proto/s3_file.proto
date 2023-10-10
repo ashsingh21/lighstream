@@ -3,26 +3,32 @@ package s3_file;
 
 
 message FileMetadata {
-    repeated TopicMetadata topics_metadata = 1;
+    // The length of sections in bytes.
+    uint64 sections_length = 1;
+    repeated SectionMetadata sections_metadata = 2;
 }
 
-message TopicMetadata {
+message SectionMetadata {
+    uint64 start_offset = 1;
+    uint64 end_offset = 2;
+    repeated MessagesMetadata messages_metadata = 3;
+}
+
+message MessagesMetadata {
     string name = 1;
     uint32 partition = 2;
-    uint64 file_offset_start = 4;
-    uint64 file_offset_end = 5;
-    uint32 num_messages = 6;
+    uint64 messages_offset_start = 3;
+    uint64 messages_offset_end = 4;
+    uint32 num_messages = 5;
 }
 
-message TopicData {
-    string topic_name = 1;
-    uint32 partition = 2;
-    repeated TopicMessage messages = 3;
+message Messages {
+    repeated Message messages = 3;
 }
 
-message TopicMessage {
-    uint64 timestamp = 2;
-    bytes key = 3;
-    bytes value = 4;
+message Message {
+    uint64 timestamp = 1;
+    bytes key = 2;
+    bytes value = 3;
 }
 
