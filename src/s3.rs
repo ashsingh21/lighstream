@@ -254,24 +254,18 @@ impl S3FileReader {
         Ok(Self { path: path.to_string(), s3_operator: s3_operator.clone(), file_metadata: FileMetadata::decode(&file_metadata_bytes[..]).unwrap() })
     }
 
-    pub async fn get_topic_data(&self, topic_name: &str, partition: Partition, logical_start_offset: u64, logical_message_offset: u32) -> anyhow::Result<Option<Messages>> {
-        let topic_metadata = {
-            let metadata = self.get_messages_metadata(
+    pub async fn get_topic_data(&self, topic_name: &str, partition: Partition, section_index: usize) -> anyhow::Result<Option<Messages>> {
+        let range = {
+            let range = self.get_messages_metadata(
                 topic_name, 
                 partition, 
-                logical_start_offset, 
-                logical_message_offset
+                section_index
             );
 
-            match metadata {
-                Some(metadata) => metadata,
+            match range {
+                Some(range) => range,
                 None => return Ok(None),
             }
-        };
-
-        let range = std::ops::Range {
-            start: topic_metadata.messages_offset_start,
-            end: topic_metadata.messages_offset_end,
         };
 
         let compressed_bytes = Self::get_bytes_for_range(&self.path, self.s3_operator.clone(), range).await?;
@@ -283,27 +277,18 @@ impl S3FileReader {
 
         let topic_data = Messages::decode(&out_buffer[..]).unwrap();
 
+
         Ok(Some(topic_data))
     }
 
-    fn get_messages_metadata(&self, topic_name: &str, partition: Partition, logical_start_offset: u64, logical_message_offset: u32) -> Option<MessagesMetadata> {
-        // for each section if same topic and parition then increment the number
-        let mut curr_count = HashMap::new();
-        for section in self.file_metadata.sections_metadata.iter() {
-            for message_metadata in &section.messages_metadata {
-                let key = (message_metadata.name.clone(), message_metadata.partition);
-                if message_metadata.name == topic_name && message_metadata.partition == partition {
-                    if curr_count.get(&key).unwrap_or(&0) + message_metadata.num_messages as u64 + logical_start_offset > logical_message_offset as u64 {
-                        let mut meta = message_metadata.clone();
-                        meta.messages_offset_start += section.start_offset;
-                        meta.messages_offset_end += section.start_offset;
-                        return Some(meta);
-                    }
-                }
-                curr_count.insert(key, message_metadata.num_messages as u64);
-            }
-        }
-        None
+    fn get_messages_metadata(&self, topic_name: &str, partition: Partition, section_index: usize) -> Option<std::ops::Range<u64>> {
+        let section_metadata = self.file_metadata.sections_metadata.get(section_index)?;
+        let topic_metadata = section_metadata.messages_metadata.iter().find(|metadata| metadata.name == topic_name && metadata.partition == partition)?;
+
+        Some(
+            topic_metadata.messages_offset_start + section_metadata.start_offset
+            ..topic_metadata.messages_offset_end + section_metadata.start_offset
+        )
     }
 
     // FIX ME: maybe provide buffer to reuse?
@@ -321,7 +306,7 @@ impl S3FileReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{sync::Arc, any};
+    use std::sync::Arc;
     use opendal::{Operator, services, layers::LoggingLayer};
 
     // TODO: test tuple
@@ -429,7 +414,7 @@ mod tests {
         let (filename, _) = s3_file.upload_and_clear().await?;
         let s3_file_reader = S3FileReader::try_new(&filename, op.clone()).await?;
 
-        let topic_data = s3_file_reader.get_topic_data(topic_name1, partition1, 0, 1).await?.expect("failed to get topic data");
+        let topic_data = s3_file_reader.get_topic_data(topic_name1, partition1, 0).await?.expect("failed to get topic data");
         let messages = topic_data.messages;
 
         assert!(messages.len() == 2);
@@ -440,7 +425,7 @@ mod tests {
         assert!(messages[1].key == "test-key".as_bytes());
         assert!(messages[1].value == "test-message-1".as_bytes());
 
-        let topic_data = s3_file_reader.get_topic_data(topic_name2, partition2, 0, 0).await?.expect("failed to get topic data");
+        let topic_data = s3_file_reader.get_topic_data(topic_name2, partition2, 0).await?.expect("failed to get topic data");
         let messages = topic_data.messages;
 
         assert!(messages.len() == 1);
@@ -455,7 +440,7 @@ mod tests {
         let op = create_operator().expect("failed to create operator");
         let mut s3_file = S3File::new(op.clone());
 
-        let topic_name1 = "test-topic";
+        let topic_name1 = "test-topic-1";
         let partition1 = 0;
 
         for i in 0..2 {
@@ -474,7 +459,7 @@ mod tests {
         let topic_name2 = "test-topic-2";
         let partition2 = 2;
 
-        for i in 0..2 {
+        for i in 2..4 {
             let message = message_collector::Message {
                 data: Bytes::from(format!("test-message-{}-{}", topic_name2, i)),
                 partition: partition2,
@@ -485,24 +470,14 @@ mod tests {
 
         let (filename2, _) = s3_file.upload_and_clear().await?;
 
-        for i in 2..4 {
-            let message = message_collector::Message {
-                data: Bytes::from(format!("test-message-{}-{}", topic_name2, i)),
-                partition: partition2,
-                topic_name: topic_name2.to_string(),
-            };
-            s3_file.insert_message(topic_name2, partition2, message);
-        }
-
-        let (filename3, _) = s3_file.upload_and_clear().await?;
-
 
         let file_merger = FileMerger::new(op.clone());
-        let merged_file = file_merger.merge(vec![filename, filename2, filename3]).await?;
+        let merged_file = file_merger.merge(vec![filename, filename2]).await?;
 
         let s3_file_reader = S3FileReader::try_new(&merged_file, op.clone()).await?;
 
-        let topic_data = s3_file_reader.get_topic_data(topic_name1, partition1, 0, 0).await?.expect("failed to get topic data");
+
+        let topic_data = s3_file_reader.get_topic_data(topic_name1, partition1, 0).await?.expect("failed to get topic data");
         let messages = topic_data.messages;
 
         assert!(messages.len() == 2);
@@ -513,7 +488,7 @@ mod tests {
         assert!(messages[1].key == "test-key".as_bytes());
         assert!(messages[1].value == format!("test-message-{}-1", topic_name1).as_bytes());
 
-        let topic_data = s3_file_reader.get_topic_data(topic_name2, partition2, 0, 3).await?.expect("failed to get topic data");
+        let topic_data = s3_file_reader.get_topic_data(topic_name2, partition2, 1).await?.expect("failed to get topic data");
         let messages = topic_data.messages;
 
         assert!(messages.len() == 2);
@@ -526,6 +501,5 @@ mod tests {
 
         Ok(())
     }
-
 }
 
