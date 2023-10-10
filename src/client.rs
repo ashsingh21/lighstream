@@ -48,7 +48,7 @@ async fn producer_test() -> anyhow::Result<()> {
     let mut record_batch = Vec::new();
 
     for i in 0..10 {
-        let topic_name = format!("test_topic_0");
+        let topic_name = format!("test_topic_1");
         let kb_50 = 50 * 1024; // 50kb
 
         let random_string = (0..kb_50).map(|_| rand::random::<char>()).collect::<String>();

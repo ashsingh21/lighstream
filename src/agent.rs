@@ -84,7 +84,7 @@ impl Agent {
             },
             Command::SendBatch { requests } => {
                 debug!("got send batch command...");
-                let response_code = self.message_factory.0.call(|reply_port| {
+                let response_code = self.message_factory.call(|reply_port| {
                     FactoryMessage::Dispatch(Job {
                         key: "batch_asas".into(),
                         msg: MessageCollectorWorkerOperation::CollectBatch(

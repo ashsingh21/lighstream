@@ -6,7 +6,12 @@ mod producer;
 mod pubsub {
     tonic::include_proto!("pubsub");
 }
+mod compactor;
 
+use std::sync::Arc;
+
+use opendal::layers::LoggingLayer;
+use opendal::services;
 use pubsub::PublishBatchRequest;
 use pubsub::pub_sub_server::PubSub;
 use dotenv;
@@ -74,8 +79,33 @@ async fn main() -> anyhow::Result<()> {
     info!("starting up pub sub server");
 
     let _guard = unsafe { foundationdb::boot() };
+
+    start_compaction().await?;
     
-    start_server().await?;
+    // start_server().await?;
+
+    Ok(())
+}
+
+async fn start_compaction() -> anyhow::Result<()> {
+    let mut builder = services::S3::default();
+    builder.access_key_id(&std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID not set"));
+    builder.secret_access_key(&std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"));
+    builder.bucket("lightstream");
+    builder.endpoint("http://localhost:9000");
+    builder.region("us-east-1");
+
+    let op = Arc::new(opendal::Operator::new(builder)?
+        .layer(LoggingLayer::default())
+        .finish());
+
+    let compactor = compactor::FileCompactor::try_new(op.clone()).expect("could not create compactor");
+
+    let s3_file_reader = s3::S3FileReader::try_new("topics_data/topic_data_batch_1696901266088622330", op.clone()).await?;
+
+    for meta in s3_file_reader.file_metadata.sections_metadata {
+        println!("meta: {:?}", meta);
+    }
 
     Ok(())
 }
