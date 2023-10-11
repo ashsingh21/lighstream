@@ -2,6 +2,7 @@ mod s3_file {
     tonic::include_proto!("s3_file");
 }
 
+
 use std::{sync::Arc, any};
 
 use bytes::{Bytes, BufMut, BytesMut};
@@ -10,8 +11,6 @@ use prost::Message;
 use tracing::info;
 
 use crate::{streaming_layer::{self, TopicMetadata}, s3::{self, MAGIC_BYTES, BatchStatistics, create_filepath}};
-
-use self::s3_file::TopicMetadata as S3TopicMetadata;
 
 
 
@@ -23,93 +22,76 @@ async fn main() -> anyhow::Result<()> {
     let subscriber = tracing_subscriber::FmtSubscriber::builder()
         .with_max_level(tracing::Level::INFO)
         .finish();
+
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber)?;
     let _guard = unsafe { foundationdb::boot() };
-    let compactor = FileCompactor::try_new()?;
 
-    let mut start_offset = 0;
-    let limit = 10000;
 
-    loop {
-        info!("compacting...");
-        compactor.compact(start_offset, limit).await?;
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
-        start_offset += limit;
-    }
-
-    // Ok(())
+    Ok(())
 }
 
-pub struct TopicParitionCompactor {
-    topic: String,
-    partition: i32,
+pub struct FileCompactor {
     op: Arc<opendal::Operator>,
-}
-
-
-impl TopicParitionCompactor {
-
-}
-struct FileCompactor {
-    op: Arc<opendal::Operator>,
-    streaming_layer: streaming_layer::StreamingLayer,
+    pub streaming_layer: streaming_layer::StreamingLayer,
 }
 
 impl FileCompactor {
-    fn try_new(op: Arc<opendal::Operator>) -> anyhow::Result<Self> {
+    pub fn try_new(op: Arc<opendal::Operator>) -> anyhow::Result<Self> {
         let streaming_layer = streaming_layer::StreamingLayer::new();
 
         Ok(Self {
             op,
             streaming_layer,
         })
-    } 
+    }
 
-    async fn compact(&self, topic_name: &str, partition: u32) -> anyhow::Result<()> {
-        // get all the files for first 100k messages
-        let start_offset = 0;
-        let limit = 100000;
 
-        let files = self.streaming_layer
-            .get_files_for_offset_range(
-                &topic_name, 
-                partition, 
-                start_offset, 
-                Some(start_offset + limit)
-            ).await?;
+    pub async fn compact(&self) -> anyhow::Result<()> {
+        let (files, file_keys_to_delete_after_compaction) = self.streaming_layer.get_first_files_for_compaction().await?;
 
-        let max_bytes: u64 = 200 * 1024 * 1024 * 10; // 200 MB
-        let mut total_bytes: u64 = 0;
+        // gets as string
+        let filenames = files.keys().map(|file| file.as_str()).collect::<Vec<&str>>();
 
-        let mut files_to_merge = Vec::new();
+        let file_merger = s3::FileMerger::new(self.op.clone());
 
-        for (start_offset, file_path) in files.iter() {
-            let file_stats = self.op.stat(file_path).await?;
+        let new_file = file_merger.merge(&filenames).await?;
 
-            if total_bytes + file_stats.content_length() > max_bytes {
-                let merged_file_bytes = self.merge_files(&files_to_merge[..]).await?;
-                let filepath = create_filepath();
+        let file_ref = &files;
+        let new_file_ref = new_file.as_str();
 
-                match self.op.write(&filepath, merged_file_bytes).await {
-                    Ok(_) => {
-                        info!("merged file written to {}", filepath);
-                    },
-                    Err(e) => {
-                        info!("failed to write merged file to {}", filepath);
-                        anyhow::bail!(e);
-                    }
+        self.streaming_layer.db.run(|trx, _maybe_commited| async move {
+            for (_, offset_start_keys) in file_ref {
+                for offset_start_key in offset_start_keys {
+                    trx.set(offset_start_key, new_file_ref.as_bytes());
                 }
-                total_bytes = 0;
-                files_to_merge.clear();
-            } else {
-                total_bytes += file_stats.content_length();
-                files_to_merge.push(file_path.clone());
             }
+            Ok(())
+        }).await?;
+
+        info!("offset_start_keys updated...");
+
+        for filename in filenames.iter() {
+            self.op.delete(filename).await?;
         }
+
+        info!("old files deleted...");
+
+        let keys_to_clear_ref = &file_keys_to_delete_after_compaction[..];
+
+        // delete keys from filecompaction
+        self.streaming_layer.db.run(|trx, _maybe_commited| async move {
+            for key in keys_to_clear_ref {
+                trx.clear(key);
+            }
+            Ok(())
+        }).await?;
+
+        info!("compaction range cleared...");
 
         Ok(())
     }
+
 }
 

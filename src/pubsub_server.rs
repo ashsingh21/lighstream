@@ -6,7 +6,13 @@ mod producer;
 mod pubsub {
     tonic::include_proto!("pubsub");
 }
+mod compactor;
 
+use std::os::unix::thread;
+use std::sync::Arc;
+
+use opendal::layers::LoggingLayer;
+use opendal::services;
 use pubsub::PublishBatchRequest;
 use pubsub::pub_sub_server::PubSub;
 use dotenv;
@@ -44,7 +50,7 @@ impl PubSub for Agent {
                         return Err(Status::internal("error sending batch"));
                     },
                     CallResult::Timeout => {
-                        info!("timeout while sending batch");
+                        info!("while sending batch");
                         return Err(Status::internal("timeout while sending batch"));
                     }
                 }
@@ -71,22 +77,64 @@ async fn main() -> anyhow::Result<()> {
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber)?;
 
-    info!("starting up pub sub server");
-
     let _guard = unsafe { foundationdb::boot() };
-    
-    start_server().await?;
 
+    let handle = std::thread::spawn(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(2)
+            .build()
+            .unwrap()
+            .block_on(start_compaction())
+    }); 
+  
+    start_server().await?;
+    handle.join().unwrap().expect("compaction failed");
     Ok(())
 }
 
+async fn start_compaction() -> anyhow::Result<()> {
+    let mut builder = services::S3::default();
+    builder.access_key_id(&std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID not set"));
+    builder.secret_access_key(&std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"));
+    builder.bucket("lightstream");
+    builder.endpoint("http://localhost:9000");
+    builder.region("us-east-1");
+
+    let op = Arc::new(opendal::Operator::new(builder)?
+        .layer(LoggingLayer::default())
+        .finish());
+
+    let compactor = compactor::FileCompactor::try_new(op.clone()).expect("could not create compactor");
+
+    info!("starting compactor...");
+
+    loop {
+        match compactor.compact().await {
+            Ok(_) => {
+                info!("going for next compaction...")
+            },
+            Err(e) => {
+                if e.to_string().contains("no files to compact") {
+                    info!("no files to waiting compact...");
+                } else {
+                    info!("compaction failed...");
+                    return Err(e);
+                }
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(2 * 60)).await;
+    }
+}
+
 async fn start_server() -> anyhow::Result<()> {
-    let addrs = ["[::1]:50050", "[::1]:50051"];
+    info!("starting up pub sub server");
+    let addrs = ["[::1]:50052", "[::1]:50053"];
     let (tx, mut rx) = mpsc::unbounded_channel();
     for addr in &addrs {
         let addr = addr.parse()?;
         let tx = tx.clone();
-        let pubsub_service = Agent::try_new(15).await?;
+        let pubsub_service = Agent::try_new(20).await?;
 
         let server = Server::builder()
         .add_service(PubSubServer::new(pubsub_service))
