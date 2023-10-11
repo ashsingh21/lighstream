@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
             while let Some(res) = task_set.join_next().await {
                 res.expect("task failed");
             }
-            println!("{} messages sent in {:?}", 1000, start.elapsed());
+            println!("{} messages sent in {:?}", 1000 * 2, start.elapsed());
 
         }
         tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
@@ -57,7 +57,8 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn producer_test(batch_size: u32) -> anyhow::Result<()> {
-    let mut producer = producer::Producer::try_new("http://[::1]:50051").await?;
+    let mut producer1 = producer::Producer::try_new("http://[::1]:50052").await?;
+    let mut producer2 = producer::Producer::try_new("http://[::1]:50053").await?;
 
     let mut record_batch = Vec::new();
 
@@ -70,7 +71,8 @@ async fn producer_test(batch_size: u32) -> anyhow::Result<()> {
         record_batch.push((topic_name, i % 10, random_string.into_bytes()));
     }
 
-    let response = producer.send(record_batch).await?;
+    let response = producer1.send(record_batch.clone()).await;
+    let response = producer2.send(record_batch).await;
 
     Ok(())
 }

@@ -45,7 +45,8 @@ impl FileCompactor {
             op,
             streaming_layer,
         })
-    } 
+    }
+
 
     pub async fn compact(&self) -> anyhow::Result<()> {
         let (files, file_keys_to_delete_after_compaction) = self.streaming_layer.get_first_files_for_compaction().await?;
@@ -82,7 +83,6 @@ impl FileCompactor {
         // delete keys from filecompaction
         self.streaming_layer.db.run(|trx, _maybe_commited| async move {
             for key in keys_to_clear_ref {
-                println!("clearing key: {:?}", String::from_utf8(key.to_vec()));
                 trx.clear(key);
             }
             Ok(())

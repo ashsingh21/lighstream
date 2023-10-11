@@ -50,7 +50,7 @@ impl PubSub for Agent {
                         return Err(Status::internal("error sending batch"));
                     },
                     CallResult::Timeout => {
-                        info!("timeout while sending batch");
+                        info!("while sending batch");
                         return Err(Status::internal("timeout while sending batch"));
                     }
                 }
@@ -123,18 +123,18 @@ async fn start_compaction() -> anyhow::Result<()> {
                 }
             }
         }
-        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(2 * 60)).await;
     }
 }
 
 async fn start_server() -> anyhow::Result<()> {
     info!("starting up pub sub server");
-    let addrs = ["[::1]:50050", "[::1]:50051"];
+    let addrs = ["[::1]:50052", "[::1]:50053"];
     let (tx, mut rx) = mpsc::unbounded_channel();
     for addr in &addrs {
         let addr = addr.parse()?;
         let tx = tx.clone();
-        let pubsub_service = Agent::try_new(10).await?;
+        let pubsub_service = Agent::try_new(20).await?;
 
         let server = Server::builder()
         .add_service(PubSubServer::new(pubsub_service))
