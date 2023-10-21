@@ -2,8 +2,20 @@ syntax = "proto3";
 package pubsub;
 
 service PubSub {
-    // Our SayHello rpc accepts HelloRequests and returns HelloReplies
     rpc publish (PublishBatchRequest) returns (PublishResponse);
+    rpc fetch (FetchRequest) returns (FetchResponse);
+    rpc commit (CommitRequest) returns (CommitResponse);
+}
+
+message CommitRequest {
+    string topic_name = 1;
+    uint32 partition = 2;
+    uint64 offset = 3;
+}
+
+message CommitResponse {
+    int32 code = 1;
+    string description = 2;
 }
 
 message PublishBatchRequest {
@@ -13,10 +25,58 @@ message PublishBatchRequest {
 message PublishRequest {
     string topic_name = 1;
     uint32 partition = 2;
-    bytes message = 3;
+    Message message = 3;
 }
 
+
 message PublishResponse {
-    int32 code = 3;
-    string description = 4;
+    int32 code = 1;
+    string description = 2;
 }
+
+message FetchRequest {
+    string topic_name = 1;
+    uint32 partition = 2;
+    uint64 offset = 3;
+    uint32 max_records = 4; // maybe like Kafka it should be bytes?
+}
+
+message FetchResponse {
+    repeated Message messages = 3;
+}
+
+message FileMetadata {
+    // The length of sections in bytes.
+    uint64 sections_length = 1;
+    repeated SectionMetadata sections_metadata = 2;
+}
+
+message SectionMetadata {
+    uint64 start_offset = 1;
+    uint64 end_offset = 2;
+    repeated MessagesMetadata messages_metadata = 3;
+}
+
+message MessagesMetadata {
+    string name = 1;
+    uint32 partition = 2;
+    uint64 messages_offset_start = 3;
+    uint64 messages_offset_end = 4;
+    uint32 num_messages = 5;
+}
+
+message Messages {
+    repeated Message messages = 3;
+}
+
+message Message {
+    uint64 timestamp = 1;
+    bytes key = 2;
+    bytes value = 3;
+}
+
+message DataLocation {
+    string path = 1;
+    uint32 section_index = 2;
+}
+

@@ -2,19 +2,25 @@ pub mod pubsub {
     tonic::include_proto!("pubsub");
 }
 
-
 use std::sync::Arc;
 
 use bytes::Bytes;
-use opendal::{Operator, services, layers::LoggingLayer};
+use opendal::{layers::LoggingLayer, services, Operator};
 use ractor::{
     concurrency::JoinHandle,
-    factory::{FactoryMessage, Job, JobOptions, WorkerBuilder, WorkerMessage, WorkerStartContext, DiscardHandler},
+    factory::{
+        DiscardHandler, FactoryMessage, Job, JobOptions, WorkerBuilder, WorkerMessage,
+        WorkerStartContext,
+    },
     Actor, ActorProcessingErr, ActorRef, RpcReplyPort,
 };
 use tracing::{debug, info};
 
-use crate::{s3, streaming_layer::{Partition, StreamingLayer}, pubsub::PublishRequest};
+use crate::{
+    pubsub::PublishRequest,
+    s3,
+    streaming_layer::{Partition, StreamingLayer},
+};
 
 // Reference https://github.com/slawlor/ractor/blob/000fbb63e7c5cb9fa522535565d1d74c48df7f8e/ractor/src/factory/tests/mod.rs#L156
 
@@ -36,7 +42,7 @@ impl Message {
         Self {
             topic_name,
             data,
-            partition
+            partition,
         }
     }
 }
@@ -78,8 +84,9 @@ impl MessageState {
     }
 
     fn will_exceed_foundation_db_transaction_limit(&self, message: &Message) -> bool {
-       self.keys_size >= FOUNDATION_DB_KEY_TRASACTION_LIMIT || 
-        self.total_bytes + message.topic_name.len() + message.data.len() >= FOUNDATION_DB_TRASACTION_LIMIT
+        self.keys_size >= FOUNDATION_DB_KEY_TRASACTION_LIMIT
+            || self.total_bytes + message.topic_name.len() + message.data.len()
+                >= FOUNDATION_DB_TRASACTION_LIMIT
     }
 }
 
@@ -118,15 +125,20 @@ impl Actor for MessageCollectorWorker {
         );
 
         let mut builder = services::S3::default();
-        builder.access_key_id(&std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID not set"));
-        builder.secret_access_key(&std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"));
+        builder
+            .access_key_id(&std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID not set"));
+        builder.secret_access_key(
+            &std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"),
+        );
         builder.bucket("lightstream");
         builder.endpoint("http://localhost:9000");
         builder.region("us-east-1");
-    
-        let op = Arc::new(Operator::new(builder)?
-            .layer(LoggingLayer::default())
-            .finish());
+
+        let op = Arc::new(
+            Operator::new(builder)?
+                .layer(LoggingLayer::default())
+                .finish(),
+        );
 
         Ok(MessageCollectorState {
             message_state: MessageState::new(op.clone()),
@@ -153,19 +165,22 @@ impl Actor for MessageCollectorWorker {
             }
             WorkerMessage::Dispatch(job) => {
                 match job.msg {
-                    MessageCollectorWorkerOperation::Collect( message , reply_port) => {
-                        debug!(
-                            "worker {} got collect",
-                            state.worker_state.wid
-                        );
+                    MessageCollectorWorkerOperation::Collect(message, reply_port) => {
+                        debug!("worker {} got collect", state.worker_state.wid);
 
-                        if state.message_state.will_exceed_foundation_db_transaction_limit(&message) {
+                        if state
+                            .message_state
+                            .will_exceed_foundation_db_transaction_limit(&message)
+                        {
                             info!("exceeded foundation db transaction limit");
 
                             let start = tokio::time::Instant::now();
                             match state.message_state.s3_file.upload_and_clear().await {
                                 Ok((path, batch_statistic)) => {
-                                    self.streaming_db.commit_batch_statistics(&path, &batch_statistic).await.expect("could not commit batch");
+                                    self.streaming_db
+                                        .commit_batch_statistics(&path, &batch_statistic)
+                                        .await
+                                        .expect("could not commit batch");
                                     info!("upload to s3 took: {}ms", start.elapsed().as_millis());
                                 }
                                 Err(e) => {
@@ -175,27 +190,35 @@ impl Actor for MessageCollectorWorker {
                             info!("upload to s3 took: {}ms", start.elapsed().as_millis());
 
                             state.message_state.clear();
-                            state.message_state.reply_ports.drain(..).for_each(|reply_port|{
-                                if reply_port.send(0).is_err() {
-                                    debug!("Listener dropped their port before we could reply");
-                                }
-                            });
+                            state
+                                .message_state
+                                .reply_ports
+                                .drain(..)
+                                .for_each(|reply_port| {
+                                    if reply_port.send(0).is_err() {
+                                        debug!("Listener dropped their port before we could reply");
+                                    }
+                                });
                         }
 
                         state.message_state.push(message.clone()); // FIXME: needed for transaction limit, should move transaction limit check to s3 file?
-                        state.message_state.s3_file.insert_message(&message.topic_name, message.partition, message.clone());
+                        state.message_state.s3_file.insert_message(
+                            &message.topic_name,
+                            message.partition,
+                            message.clone(),
+                        );
                         state.message_state.reply_ports.push(reply_port);
                     }
                     MessageCollectorWorkerOperation::Flush => {
-                        debug!(
-                            "worker {} got flush message",
-                            state.worker_state.wid
-                        );
+                        debug!("worker {} got flush message", state.worker_state.wid);
                         if state.message_state.s3_file.size() > 0 {
                             let start = tokio::time::Instant::now();
                             match state.message_state.s3_file.upload_and_clear().await {
                                 Ok((path, batch_statistic)) => {
-                                    self.streaming_db.commit_batch_statistics(&path, &batch_statistic).await.expect("could not commit batch");
+                                    self.streaming_db
+                                        .commit_batch_statistics(&path, &batch_statistic)
+                                        .await
+                                        .expect("could not commit batch");
                                     info!("upload to s3 took: {}ms", start.elapsed().as_millis());
                                 }
                                 Err(e) => {
@@ -205,23 +228,32 @@ impl Actor for MessageCollectorWorker {
 
                             state.message_state.clear(); // FIXME: needed for transaction limit, should move transaction limit check to s3 file?
                             info!("replying to listeners...");
-                            state.message_state.reply_ports.drain(..).for_each(|reply_port|{
-                                if reply_port.send(0).is_err() {
-                                    debug!("Listener dropped their port before we could reply");
-                                }
-                            });
+                            state
+                                .message_state
+                                .reply_ports
+                                .drain(..)
+                                .for_each(|reply_port| {
+                                    if reply_port.send(0).is_err() {
+                                        debug!("Listener dropped their port before we could reply");
+                                    }
+                                });
                         }
                     }
                     MessageCollectorWorkerOperation::CollectBatch(messages, reply_port) => {
-                        debug!(
-                            "worker {} got collect batch",
-                            state.worker_state.wid
-                        );
+                        debug!("worker {} got collect batch", state.worker_state.wid);
 
                         for message in messages {
-                            let message = Message::new(message.topic_name.clone(), message.message.clone().into(), message.partition);
-                            state.message_state.push( message.clone() );
-                            state.message_state.s3_file.insert_message(&message.topic_name, message.partition, message.clone());
+                            let message = Message::new(
+                                message.topic_name.clone(),
+                                message.message.unwrap().value.clone().into(),
+                                message.partition,
+                            );
+                            state.message_state.push(message.clone());
+                            state.message_state.s3_file.insert_message(
+                                &message.topic_name,
+                                message.partition,
+                                message.clone(),
+                            );
                         }
                         state.message_state.reply_ports.push(reply_port);
                     }
@@ -240,7 +272,6 @@ impl Actor for MessageCollectorWorker {
         Ok(())
     }
 }
-
 
 pub struct MessageCollectorWorkerBuilder;
 
@@ -289,8 +320,7 @@ impl MessageCollectorFactory {
 
 struct DiscardedMessageHandler;
 
-impl DiscardHandler<TopicName, MessageCollectorWorkerOperation> for DiscardedMessageHandler
-{
+impl DiscardHandler<TopicName, MessageCollectorWorkerOperation> for DiscardedMessageHandler {
     fn discard(&self, job: Job<TopicName, MessageCollectorWorkerOperation>) {
         info!("discarded message: {:?}........", job.key);
     }
