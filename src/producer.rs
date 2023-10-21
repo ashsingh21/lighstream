@@ -14,28 +14,40 @@ pub type RecordBatch = Vec<Record>;
 
 #[derive(Clone)]
 pub struct Producer {
-    client: PubSubClient<Channel>
+    client: PubSubClient<Channel>,
 }
 
 impl Producer {
     pub async fn try_new(connect_url: &str) -> anyhow::Result<Self> {
-        Ok(Self { client: PubSubClient::connect(connect_url.to_string()).await? })
+        Ok(Self {
+            client: PubSubClient::connect(connect_url.to_string()).await?,
+        })
     }
 
-    pub async fn send(&mut self, record_batch: RecordBatch) -> anyhow::Result<Response<PublishResponse>> {
+    pub async fn send(
+        &mut self,
+        record_batch: RecordBatch,
+    ) -> anyhow::Result<Response<PublishResponse>> {
         let mut requests = Vec::new();
 
         for (topic_name, partition, message) in record_batch {
             requests.push(pubsub::PublishRequest {
                 topic_name,
-                message,
-                partition
+                message: Some(pubsub::Message {
+                    key: message.clone(),
+                    value: message.clone(),
+                    timestamp: 0,
+                }),
+                partition,
             });
         }
 
-        let response = self.client.publish(tonic::Request::new(pubsub::PublishBatchRequest {
-            requests
-        })).await?;
+        let response = self
+            .client
+            .publish(tonic::Request::new(pubsub::PublishBatchRequest {
+                requests,
+            }))
+            .await?;
 
         Ok(response)
     }

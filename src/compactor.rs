@@ -1,23 +1,25 @@
 mod s3_file {
-    tonic::include_proto!("s3_file");
+    tonic::include_proto!("pubsub");
 }
 
+use std::{any, sync::Arc};
 
-use std::{sync::Arc, any};
-
-use bytes::{Bytes, BufMut, BytesMut};
-use opendal::{services, layers::LoggingLayer};
+use bytes::{BufMut, Bytes, BytesMut};
+use opendal::{layers::LoggingLayer, services};
 use prost::Message;
 use tracing::info;
 
-use crate::{streaming_layer::{self, TopicMetadata}, s3::{self, MAGIC_BYTES, BatchStatistics, create_filepath}};
+use crate::{
+    s3::{self, create_filepath, BatchStatistics, MAGIC_BYTES},
+    streaming_layer::{self, TopicMetadata},
+};
 
-
+use s3_file::DataLocation;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
-    
+
     // construct a subscriber that prints formatted traces to stdout
     let subscriber = tracing_subscriber::FmtSubscriber::builder()
         .with_max_level(tracing::Level::INFO)
@@ -26,8 +28,6 @@ async fn main() -> anyhow::Result<()> {
     // use that subscriber to process traces emitted after this point
     tracing::subscriber::set_global_default(subscriber)?;
     let _guard = unsafe { foundationdb::boot() };
-
-
 
     Ok(())
 }
@@ -47,12 +47,17 @@ impl FileCompactor {
         })
     }
 
-
     pub async fn compact(&self) -> anyhow::Result<()> {
-        let (files, file_keys_to_delete_after_compaction) = self.streaming_layer.get_first_files_for_compaction().await?;
+        let (files, file_keys_to_delete_after_compaction) = self
+            .streaming_layer
+            .get_first_files_for_compaction()
+            .await?;
 
         // gets as string
-        let filenames = files.keys().map(|file| file.as_str()).collect::<Vec<&str>>();
+        let filenames = files
+            .keys()
+            .map(|file| file.as_str())
+            .collect::<Vec<&str>>();
 
         let file_merger = s3::FileMerger::new(self.op.clone());
 
@@ -61,14 +66,23 @@ impl FileCompactor {
         let file_ref = &files;
         let new_file_ref = new_file.as_str();
 
-        self.streaming_layer.db.run(|trx, _maybe_commited| async move {
-            for (_, offset_start_keys) in file_ref {
-                for offset_start_key in offset_start_keys {
-                    trx.set(offset_start_key, new_file_ref.as_bytes());
+        self.streaming_layer
+            .db
+            .run(|trx, _maybe_commited| async move {
+                for (idx, (_, offset_start_keys)) in file_ref.iter_all().enumerate() {
+                    for offset_start_key in offset_start_keys {
+                        let data_location = DataLocation {
+                            path: new_file_ref.clone().into(),
+                            // This only works if filenames have the same order as the keys in
+                            // files which is case since filenames are keys collected from files
+                            section_index: idx as u32,
+                        };
+                        trx.set(offset_start_key, &data_location.encode_to_vec());
+                    }
                 }
-            }
-            Ok(())
-        }).await?;
+                Ok(())
+            })
+            .await?;
 
         info!("offset_start_keys updated...");
 
@@ -81,17 +95,18 @@ impl FileCompactor {
         let keys_to_clear_ref = &file_keys_to_delete_after_compaction[..];
 
         // delete keys from filecompaction
-        self.streaming_layer.db.run(|trx, _maybe_commited| async move {
-            for key in keys_to_clear_ref {
-                trx.clear(key);
-            }
-            Ok(())
-        }).await?;
+        self.streaming_layer
+            .db
+            .run(|trx, _maybe_commited| async move {
+                for key in keys_to_clear_ref {
+                    trx.clear(key);
+                }
+                Ok(())
+            })
+            .await?;
 
         info!("compaction range cleared...");
 
         Ok(())
     }
-
 }
-
