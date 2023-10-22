@@ -28,8 +28,8 @@ async fn main() -> anyhow::Result<()> {
     builder.secret_access_key(
         &std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"),
     );
-    builder.bucket("lightstream");
-    builder.endpoint("http://localhost:9000");
+    builder.bucket(&std::env::var("S3_BUCKET").expect("S3_BUCKET not set"));
+    builder.endpoint(&std::env::var("S3_ENDPOINT").expect("S3_ENDPOINT not set"));
     builder.region("us-east-1");
 
     let _op = Arc::new(
@@ -56,52 +56,54 @@ async fn main() -> anyhow::Result<()> {
                 println!("total messages: {}", total_messages);
             }
             Err(e) => {
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
                 // println!("error: {:?}", e);
             }
         };
     }
 
-
     // loop {
-    //     let mut producer = producer::Producer::try_new("http://[::1]:50052").await?;
+    //     let mut producer = producer::Producer::try_new("http://[::1]:50054").await?;
     //     let partitions = 2;
     //         for partition in 0..partitions {
     //             let mut record_batch = Vec::new();
-    //             for i in 0..100 {
-    //                 let value = format!("message_{}", i);
-    //                 let record = (topic_name.to_string(), partition, value.into_bytes());
+    //             for i in 0..10000 {
+    //                 // value of 1 kb
+    //                 let value = vec![0; 5 * 1024];
+    //                 let record = (topic_name.to_string(), partition, value);
     //                 record_batch.push(record);
     //             }
+    //             let start = tokio::time::Instant::now();
     //             let response = producer.send(record_batch).await?;
-    //             println!("response: {:?}", response);
+    //             println!("{} messages sent in {:?}", 10000, start.elapsed());
     //         }
     //         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    
-    //     println!("done...");
-    // }
+    //     }
+        println!("done...");
+
+        Ok(())
 
 
     // let streaming_layer = StreamingLayer::new();
 
-    let mut task_set = tokio::task::JoinSet::new();
-    loop {
-        task_set.spawn(async move {
-            producer_test(topic_name, 100).await.expect("failed to produce");
-        });
+    // let mut task_set = tokio::task::JoinSet::new();
+    // loop {
+    //     task_set.spawn(async move {
+    //         producer_test(topic_name, 500).await.expect("failed to produce");
+    //     });
 
-        if task_set.len() == 10 {
-            let start = tokio::time::Instant::now();
-            while let Some(res) = task_set.join_next().await {
-                res.expect("task failed");
-            }
-            println!("{} messages sent in {:?}", 1000 * 2, start.elapsed());
-        }
-    }
+    //     if task_set.len() == 10 {
+    //         let start = tokio::time::Instant::now();
+    //         while let Some(res) = task_set.join_next().await {
+    //             res.expect("task failed");
+    //         }
+    //         println!("{} messages sent in {:?}", 5000, start.elapsed());
+    //     }
+    // }
 }
 
 async fn producer_test(topic_name: &str, batch_size: u32) -> anyhow::Result<()> {
     let mut producer1 = producer::Producer::try_new("http://[::1]:50054").await?;
-    let mut producer2 = producer::Producer::try_new("http://[::1]:50055").await?;
 
     let mut record_batch = Vec::new();
 
@@ -116,7 +118,6 @@ async fn producer_test(topic_name: &str, batch_size: u32) -> anyhow::Result<()> 
     }
 
     let response = producer1.send(record_batch.clone()).await;
-    let response = producer2.send(record_batch).await;
 
     Ok(())
 }

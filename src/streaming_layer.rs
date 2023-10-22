@@ -414,6 +414,7 @@ impl StreamingLayer {
         batch: &BatchStatistics,
     ) -> anyhow::Result<()> {
         let batch_ref = &batch;
+        let time = std::time::Instant::now();
         // TODO: maybe trigger a cleanup?
         self.db
             .run(|trx, _maybe_committed| async move {
@@ -421,6 +422,7 @@ impl StreamingLayer {
                 Ok(())
             })
             .await?;
+        info!("commit_batch_statistics took {:?}", time.elapsed());
         Ok(())
     }
 
@@ -445,6 +447,7 @@ impl StreamingLayer {
                 &batch_statistic.topic_name,
                 batch_statistic.partition,
             );
+            
             let offset_start_key = self.subspace.create_topic_partition_offset_file_key(
                 &batch_statistic.topic_name,
                 batch_statistic.partition,

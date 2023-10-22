@@ -138,6 +138,10 @@ impl Consumer {
         Ok(records)
     }
 
+    pub fn current_offset(&self) -> u64 {
+        self.offset
+    }
+
     async fn fetch_records(
         &mut self,
         offset: u64,

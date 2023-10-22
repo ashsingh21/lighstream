@@ -3,6 +3,7 @@ mod pubsub {
 }
 
 use bytes::{BufMut, Bytes, BytesMut};
+use tracing::instrument;
 
 use crate::pubsub::{Message, Messages, MessagesMetadata, SectionMetadata};
 use futures::StreamExt;
@@ -93,6 +94,7 @@ impl FileMerger {
     }
 }
 
+#[derive(Debug)]
 pub struct S3File {
     pub topic_data: HashMap<(TopicName, Partition), Messages>,
     file_buffer: BytesMut,
@@ -181,6 +183,7 @@ impl S3File {
     }
 
     // FIXME: use Path or explicit type for filename since String is ambiguous
+    #[instrument(level="trace")]
     pub async fn upload_and_clear(&mut self) -> anyhow::Result<(String, BatchStatistics)> {
         let batch_statistics = self.bytes();
         // create unique filename
@@ -265,8 +268,9 @@ pub fn create_filepath() -> String {
             .duration_since(UNIX_EPOCH)
             .expect("time went backwards")
             .as_nanos()
-    );
-    format!("topics_data/{}", filename)
+       );
+    filename
+    // format!("topics_data/{}", filename)
 }
 
 pub struct S3FileReader {
