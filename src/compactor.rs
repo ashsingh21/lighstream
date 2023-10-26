@@ -47,6 +47,7 @@ impl FileCompactor {
         })
     }
 
+    // FIXME: Add multiple level of compaction
     pub async fn compact(&self) -> anyhow::Result<()> {
         let (files, file_keys_to_delete_after_compaction) = self
             .streaming_layer

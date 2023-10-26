@@ -189,7 +189,7 @@ async fn start_compaction() -> anyhow::Result<()> {
                 }
             }
         }
-        tokio::time::sleep(tokio::time::Duration::from_secs(2 * 60)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(4 * 60)).await;
     }
 }
 
@@ -212,7 +212,7 @@ async fn start_server() -> anyhow::Result<()> {
     );
 
 
-    let addrs = ["[::1]:50054", "[::1]:50055"];
+    let addrs = ["[::1]:50051", "[::1]:50054"];
     let (tx, mut rx) = mpsc::unbounded_channel();
     for addr in &addrs {
         let addr = addr.parse()?;

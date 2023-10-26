@@ -8,16 +8,18 @@ mod pubsub {
     tonic::include_proto!("pubsub");
 }
 
+use std::io::Write;
 use std::sync::Arc;
 
+use bytes::Bytes;
+use consumer::Record;
 use opendal::layers::LoggingLayer;
 use opendal::{services, Operator};
 use pubsub::pub_sub_client::PubSubClient;
 use pubsub::{Message, PublishRequest};
 use tonic::transport::{Channel, Endpoint};
 use tower::discover::Change;
-
-use crate::streaming_layer::StreamingLayer;
+use tracing_subscriber::fmt::format;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -48,40 +50,60 @@ async fn main() -> anyhow::Result<()> {
         .auto_commit(false)
         .build()
         .await?;
-    let mut total_messages = 0;
-    loop {
-        match consumer.poll().await {
-            Ok(records) => {
-                total_messages += records.len();
-                println!("total messages: {}", total_messages);
-            }
-            Err(e) => {
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
-                // println!("error: {:?}", e);
-            }
-        };
-    }
 
     // loop {
-    //     let mut producer = producer::Producer::try_new("http://[::1]:50054").await?;
-    //     let partitions = 2;
-    //         for partition in 0..partitions {
-    //             let mut record_batch = Vec::new();
-    //             for i in 0..10000 {
-    //                 // value of 1 kb
-    //                 let value = vec![0; 5 * 1024];
-    //                 let record = (topic_name.to_string(), partition, value);
-    //                 record_batch.push(record);
+    //     match consumer.poll().await {
+    //         Ok(records) => {
+    //             for record in records {
+    //                 let msg = String::from_utf8(record.value.into()).unwrap();
+    //                 let msg = msg.split("-").collect::<Vec<&str>>();
+    //                 println!("message: {:?}", msg[0]);
+    //                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     //             }
-    //             let start = tokio::time::Instant::now();
-    //             let response = producer.send(record_batch).await?;
-    //             println!("{} messages sent in {:?}", 10000, start.elapsed());
     //         }
-    //         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    //     }
-        println!("done...");
+    //         Err(e) => {
+    //             // println!("error: {:?}", e);
+    //         }
+    //     };
+    // }
 
-        Ok(())
+    let mut message_id: usize = 0;
+    let producer = producer::Producer::try_new("http://[::1]:50054").await?;
+    let partitions = 2;
+    let kb_5 =  1024;
+
+    loop {
+        for partition in 0..partitions {
+            let mut record_batch = Vec::new();
+            let mut total_bytes = 0;
+            for _ in 0..1000 {
+                // value of 5 kb
+                let value = {
+                    let value = (0..kb_5)
+                        .map(|_| rand::random::<char>())
+                        .collect::<String>();
+                    format!("{}-{}", message_id, value)
+                };
+                
+                let v = value.clone();
+                let record = (topic_name.to_string(), partition, v.into());
+                total_bytes += topic_name.as_bytes().len() + value.as_bytes().len() + 4;
+                record_batch.push(record);
+                message_id += 1;
+            }
+
+            let len = record_batch.len();
+            // record batch size in bytes
+
+            let start = tokio::time::Instant::now();
+            let mut p = producer.clone();
+            let _response = p.send(record_batch).await;
+            println!("Total bytes: {} sent in: {:?}",  human_bytes::human_bytes(total_bytes as u32), start.elapsed());
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    }
+
+    Ok(())
 
 
     // let streaming_layer = StreamingLayer::new();
@@ -100,6 +122,17 @@ async fn main() -> anyhow::Result<()> {
     //         println!("{} messages sent in {:?}", 5000, start.elapsed());
     //     }
     // }
+}
+
+fn compress(bytes: Bytes) -> Bytes {
+    let mut gzip = flate2::write::GzEncoder::new(
+        vec![],
+        flate2::Compression::new(8),
+    );
+    gzip.write_all(bytes.as_ref())
+        .expect("failed to write to gz");
+    let compressed = gzip.finish().expect("failed to flush gz");
+    Bytes::from(compressed)
 }
 
 async fn producer_test(topic_name: &str, batch_size: u32) -> anyhow::Result<()> {

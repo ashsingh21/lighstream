@@ -39,3 +39,21 @@ https://www.chrisfarris.com/bucket-policy-examples/#:~:text=Principal%20is%20use
         }
     ]
 }
+
+
+// S3 from EC2
+Total bytes: 3.9 MiB sent in: 758.027431ms
+Total bytes: 3.9 MiB sent in: 454.797803ms
+Total bytes: 3.9 MiB sent in: 507.121272ms
+Total bytes: 3.9 MiB sent in: 492.992896ms
+Total bytes: 3.9 MiB sent in: 509.209182ms
+Total bytes: 3.9 MiB sent in: 735.220762ms
+Total bytes: 3.9 MiB sent in: 682.862694ms
+Total bytes: 3.9 MiB sent in: 443.265106ms
+
+
+// S3 from local machine
+Total bytes: 3.9 MiB sent in: 2.373315921s
+Total bytes: 3.9 MiB sent in: 2.648950867s
+Total bytes: 3.9 MiB sent in: 1.941931869s
+Total bytes: 3.9 MiB sent in: 2.037334285s

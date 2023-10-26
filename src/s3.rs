@@ -189,8 +189,8 @@ impl S3File {
         // create unique filename
         let path = create_filepath();
 
-        // FIXME: can we avoid a clone here?
-        self.op.write(&path, self.file_buffer.to_vec()).await?;
+        let file_buffer_slice = self.file_buffer.clone();
+        self.op.write(&path, file_buffer_slice).await?;
         self.clear();
 
         Ok((path, batch_statistics))
