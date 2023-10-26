@@ -160,8 +160,8 @@ async fn start_compaction() -> anyhow::Result<()> {
     builder.secret_access_key(
         &std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"),
     );
-    builder.bucket("lightstream");
-    builder.endpoint("http://localhost:9000");
+    builder.bucket(&std::env::var("S3_BUCKET").expect("S3_BUCKET not set"));
+    builder.endpoint(&std::env::var("S3_ENDPOINT").expect("S3_ENDPOINT not set"));
     builder.region("us-east-1");
 
     let op = Arc::new(
@@ -184,12 +184,12 @@ async fn start_compaction() -> anyhow::Result<()> {
                 if e.to_string().contains("no files to compact") {
                     info!("no files to waiting compact...");
                 } else {
-                    info!("compaction failed...");
+                    info!("compaction failed, {e}");
                     return Err(e);
                 }
             }
         }
-        tokio::time::sleep(tokio::time::Duration::from_secs(2 * 60)).await;
+        tokio::time::sleep(tokio::time::Duration::from_secs(4 * 60)).await;
     }
 }
 
@@ -201,8 +201,8 @@ async fn start_server() -> anyhow::Result<()> {
     builder.secret_access_key(
         &std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"),
     );
-    builder.bucket("lightstream");
-    builder.endpoint("http://localhost:9000");
+    builder.bucket(&std::env::var("S3_BUCKET").expect("S3_BUCKET not set"));
+    builder.endpoint(&std::env::var("S3_ENDPOINT").expect("S3_ENDPOINT not set"));
     builder.region("us-east-1");
 
     let op = Arc::new(
@@ -211,12 +211,13 @@ async fn start_server() -> anyhow::Result<()> {
             .finish(),
     );
 
-    let addrs = ["[::1]:50054", "[::1]:50055"];
+
+    let addrs = ["[::1]:50051", "[::1]:50054"];
     let (tx, mut rx) = mpsc::unbounded_channel();
     for addr in &addrs {
         let addr = addr.parse()?;
         let tx = tx.clone();
-        let pubsub_service = Agent::try_new(5, op.clone()).await?;
+        let pubsub_service = Agent::try_new(15, op.clone()).await?;
 
         let max_message_size = 1024 * 1024 * 256; // 256 MB
         let server = PubSubServer::new(pubsub_service)

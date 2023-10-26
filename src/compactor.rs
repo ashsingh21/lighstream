@@ -47,6 +47,7 @@ impl FileCompactor {
         })
     }
 
+    // FIXME: Add multiple level of compaction
     pub async fn compact(&self) -> anyhow::Result<()> {
         let (files, file_keys_to_delete_after_compaction) = self
             .streaming_layer
@@ -74,7 +75,7 @@ impl FileCompactor {
                         let data_location = DataLocation {
                             path: new_file_ref.clone().into(),
                             // This only works if filenames have the same order as the keys in
-                            // files which is case since filenames are keys collected from files
+                            // files which is the case since filenames are keys collected from files
                             section_index: idx as u32,
                         };
                         trx.set(offset_start_key, &data_location.encode_to_vec());

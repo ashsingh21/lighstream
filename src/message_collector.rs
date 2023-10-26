@@ -113,7 +113,7 @@ impl Actor for MessageCollectorWorker {
     ) -> Result<Self::State, ActorProcessingErr> {
         let wid = startup_context.wid.clone();
         myself.send_interval(
-            ractor::concurrency::tokio_primatives::Duration::from_millis(1000),
+            ractor::concurrency::tokio_primatives::Duration::from_millis(250),
             move || {
                 // TODO: make sure this gets uniformly distributed to all workers
                 WorkerMessage::Dispatch(Job {
@@ -130,8 +130,8 @@ impl Actor for MessageCollectorWorker {
         builder.secret_access_key(
             &std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"),
         );
-        builder.bucket("lightstream");
-        builder.endpoint("http://localhost:9000");
+        builder.bucket(&std::env::var("S3_BUCKET").expect("S3_BUCKET not set"));
+        builder.endpoint(&std::env::var("S3_ENDPOINT").expect("S3_ENDPOINT not set"));
         builder.region("us-east-1");
 
         let op = Arc::new(

@@ -8,16 +8,18 @@ mod pubsub {
     tonic::include_proto!("pubsub");
 }
 
+use std::io::Write;
 use std::sync::Arc;
 
+use bytes::Bytes;
+use consumer::Record;
 use opendal::layers::LoggingLayer;
 use opendal::{services, Operator};
 use pubsub::pub_sub_client::PubSubClient;
 use pubsub::{Message, PublishRequest};
 use tonic::transport::{Channel, Endpoint};
 use tower::discover::Change;
-
-use crate::streaming_layer::StreamingLayer;
+use tracing_subscriber::fmt::format;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -28,8 +30,8 @@ async fn main() -> anyhow::Result<()> {
     builder.secret_access_key(
         &std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not set"),
     );
-    builder.bucket("lightstream");
-    builder.endpoint("http://localhost:9000");
+    builder.bucket(&std::env::var("S3_BUCKET").expect("S3_BUCKET not set"));
+    builder.endpoint(&std::env::var("S3_ENDPOINT").expect("S3_ENDPOINT not set"));
     builder.region("us-east-1");
 
     let _op = Arc::new(
@@ -48,60 +50,93 @@ async fn main() -> anyhow::Result<()> {
         .auto_commit(false)
         .build()
         .await?;
-    let mut total_messages = 0;
-    loop {
-        match consumer.poll().await {
-            Ok(records) => {
-                total_messages += records.len();
-                println!("total messages: {}", total_messages);
-            }
-            Err(e) => {
-                // println!("error: {:?}", e);
-            }
-        };
-    }
-
 
     // loop {
-    //     let mut producer = producer::Producer::try_new("http://[::1]:50052").await?;
-    //     let partitions = 2;
-    //         for partition in 0..partitions {
-    //             let mut record_batch = Vec::new();
-    //             for i in 0..100 {
-    //                 let value = format!("message_{}", i);
-    //                 let record = (topic_name.to_string(), partition, value.into_bytes());
-    //                 record_batch.push(record);
+    //     match consumer.poll().await {
+    //         Ok(records) => {
+    //             for record in records {
+    //                 let msg = String::from_utf8(record.value.into()).unwrap();
+    //                 let msg = msg.split("-").collect::<Vec<&str>>();
+    //                 println!("message: {:?}", msg[0]);
+    //                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     //             }
-    //             let response = producer.send(record_batch).await?;
-    //             println!("response: {:?}", response);
     //         }
-    //         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    
-    //     println!("done...");
+    //         Err(e) => {
+    //             // println!("error: {:?}", e);
+    //         }
+    //     };
     // }
+
+    let mut message_id: usize = 0;
+    let producer = producer::Producer::try_new("http://[::1]:50054").await?;
+    let partitions = 2;
+    let kb_5 =  1024;
+
+    loop {
+        for partition in 0..partitions {
+            let mut record_batch = Vec::new();
+            let mut total_bytes = 0;
+            for _ in 0..1000 {
+                // value of 5 kb
+                let value = {
+                    let value = (0..kb_5)
+                        .map(|_| rand::random::<char>())
+                        .collect::<String>();
+                    format!("{}-{}", message_id, value)
+                };
+                
+                let v = value.clone();
+                let record = (topic_name.to_string(), partition, v.into());
+                total_bytes += topic_name.as_bytes().len() + value.as_bytes().len() + 4;
+                record_batch.push(record);
+                message_id += 1;
+            }
+
+            let len = record_batch.len();
+            // record batch size in bytes
+
+            let start = tokio::time::Instant::now();
+            let mut p = producer.clone();
+            let _response = p.send(record_batch).await;
+            println!("Total bytes: {} sent in: {:?}",  human_bytes::human_bytes(total_bytes as u32), start.elapsed());
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    }
+
+    Ok(())
 
 
     // let streaming_layer = StreamingLayer::new();
 
-    let mut task_set = tokio::task::JoinSet::new();
-    loop {
-        task_set.spawn(async move {
-            producer_test(topic_name, 100).await.expect("failed to produce");
-        });
+    // let mut task_set = tokio::task::JoinSet::new();
+    // loop {
+    //     task_set.spawn(async move {
+    //         producer_test(topic_name, 500).await.expect("failed to produce");
+    //     });
 
-        if task_set.len() == 10 {
-            let start = tokio::time::Instant::now();
-            while let Some(res) = task_set.join_next().await {
-                res.expect("task failed");
-            }
-            println!("{} messages sent in {:?}", 1000 * 2, start.elapsed());
-        }
-    }
+    //     if task_set.len() == 10 {
+    //         let start = tokio::time::Instant::now();
+    //         while let Some(res) = task_set.join_next().await {
+    //             res.expect("task failed");
+    //         }
+    //         println!("{} messages sent in {:?}", 5000, start.elapsed());
+    //     }
+    // }
+}
+
+fn compress(bytes: Bytes) -> Bytes {
+    let mut gzip = flate2::write::GzEncoder::new(
+        vec![],
+        flate2::Compression::new(8),
+    );
+    gzip.write_all(bytes.as_ref())
+        .expect("failed to write to gz");
+    let compressed = gzip.finish().expect("failed to flush gz");
+    Bytes::from(compressed)
 }
 
 async fn producer_test(topic_name: &str, batch_size: u32) -> anyhow::Result<()> {
     let mut producer1 = producer::Producer::try_new("http://[::1]:50054").await?;
-    let mut producer2 = producer::Producer::try_new("http://[::1]:50055").await?;
 
     let mut record_batch = Vec::new();
 
@@ -116,7 +151,6 @@ async fn producer_test(topic_name: &str, batch_size: u32) -> anyhow::Result<()> 
     }
 
     let response = producer1.send(record_batch.clone()).await;
-    let response = producer2.send(record_batch).await;
 
     Ok(())
 }

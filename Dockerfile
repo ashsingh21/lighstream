@@ -20,6 +20,6 @@ COPY . .
 
 COPY start.bash /start.bash
 
-RUN cargo install --bin grpc-server --path .
+RUN cargo install --bin lightstream --path .
 
-CMD ["/start.bash"]
+RUN lightstream
