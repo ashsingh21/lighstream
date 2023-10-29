@@ -3,6 +3,7 @@ mod message_collector;
 mod metadata;
 mod s3;
 mod streaming_layer;
+mod ring;
 
 use std::{sync::Arc, thread, time::Duration};
 

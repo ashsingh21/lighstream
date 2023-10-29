@@ -1,14 +1,17 @@
 mod agent;
+mod consumer;
 mod message_collector;
 mod producer;
 mod s3;
 mod streaming_layer;
-mod consumer;
+
 mod pubsub {
     tonic::include_proto!("pubsub");
 }
 
 use std::io::Write;
+use std::net::{SocketAddrV6, Ipv6Addr};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -40,16 +43,23 @@ async fn main() -> anyhow::Result<()> {
             .finish(),
     );
 
+    let sl = streaming_layer::StreamingLayer::new();
+    let agents = sl.get_alive_agents().await?;
 
-    let topic_name = "clickstream";
-    let mut consumer = consumer::Consumer::builder()
-        .topic_name(topic_name.to_string())
-        .partition(1)
-        .offset(0)
-        .connect_url("http://[::1]:50054".to_string())
-        .auto_commit(false)
-        .build()
-        .await?;
+
+    for agent in agents {
+        println!("agent: {:?}", agent);
+    }
+
+    // let topic_name = "clickstream";
+    // let mut consumer = consumer::Consumer::builder()
+    //     .topic_name(topic_name.to_string())
+    //     .partition(1)
+    //     .offset(0)
+    //     .connect_url("http://[::1]:50054".to_string())
+    //     .auto_commit(false)
+    //     .build()
+    //     .await?;
 
     // loop {
     //     match consumer.poll().await {
@@ -67,44 +77,47 @@ async fn main() -> anyhow::Result<()> {
     //     };
     // }
 
-    let mut message_id: usize = 0;
-    let producer = producer::Producer::try_new("http://[::1]:50054").await?;
-    let partitions = 2;
-    let kb_5 =  1024;
+    // let mut message_id: usize = 0;
+    // let producer = producer::Producer::try_new("http://[::1]:50054").await?;
+    // let partitions = 2;
+    // let kb_5 = 1024;
 
-    loop {
-        for partition in 0..partitions {
-            let mut record_batch = Vec::new();
-            let mut total_bytes = 0;
-            for _ in 0..1000 {
-                // value of 5 kb
-                let value = {
-                    let value = (0..kb_5)
-                        .map(|_| rand::random::<char>())
-                        .collect::<String>();
-                    format!("{}-{}", message_id, value)
-                };
-                
-                let v = value.clone();
-                let record = (topic_name.to_string(), partition, v.into());
-                total_bytes += topic_name.as_bytes().len() + value.as_bytes().len() + 4;
-                record_batch.push(record);
-                message_id += 1;
-            }
+    // loop {
+    //     for partition in 0..partitions {
+    //         let mut record_batch = Vec::new();
+    //         let mut total_bytes = 0;
+    //         for _ in 0..700 {
+    //             // value of 5 kb
+    //             let value = {
+    //                 let value = (0..kb_5)
+    //                     .map(|_| rand::random::<char>())
+    //                     .collect::<String>();
+    //                 format!("{}-{}", message_id, value)
+    //             };
 
-            let len = record_batch.len();
-            // record batch size in bytes
+    //             let v = value.clone();
+    //             let record = (topic_name.to_string(), partition, v.into());
+    //             total_bytes += topic_name.as_bytes().len() + value.as_bytes().len() + 4;
+    //             record_batch.push(record);
+    //             message_id += 1;
+    //         }
 
-            let start = tokio::time::Instant::now();
-            let mut p = producer.clone();
-            let _response = p.send(record_batch).await;
-            println!("Total bytes: {} sent in: {:?}",  human_bytes::human_bytes(total_bytes as u32), start.elapsed());
-        }
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-    }
+    //         let len = record_batch.len();
+    //         // record batch size in bytes
+
+    //         let start = tokio::time::Instant::now();
+    //         let mut p = producer.clone();
+    //         let _response = p.send(record_batch).await;
+    //         println!(
+    //             "Total bytes: {} sent in: {:?}",
+    //             human_bytes::human_bytes(total_bytes as u32),
+    //             start.elapsed()
+    //         );
+    //     }
+    //     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+    // }
 
     Ok(())
-
 
     // let streaming_layer = StreamingLayer::new();
 
@@ -125,10 +138,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn compress(bytes: Bytes) -> Bytes {
-    let mut gzip = flate2::write::GzEncoder::new(
-        vec![],
-        flate2::Compression::new(8),
-    );
+    let mut gzip = flate2::write::GzEncoder::new(vec![], flate2::Compression::new(8));
     gzip.write_all(bytes.as_ref())
         .expect("failed to write to gz");
     let compressed = gzip.finish().expect("failed to flush gz");

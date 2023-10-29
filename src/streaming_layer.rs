@@ -2,7 +2,12 @@ mod s3_file {
     tonic::include_proto!("pubsub");
 }
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashSet},
+    net::{Ipv6Addr, IpAddr, SocketAddrV6},
+    time::Duration, str::FromStr,
+    hash::Hash
+};
 
 use byteorder::ByteOrder;
 use foundationdb::{
@@ -13,6 +18,7 @@ use foundationdb::{
 };
 use futures::TryStreamExt;
 use prost::Message;
+use tonic::service;
 use tracing::info;
 
 use crate::{message_collector::TopicName, s3::BatchStatistics};
@@ -40,15 +46,41 @@ pub struct StreamingLayerSubspace {
     topic_partition_high_watermark: Subspace,
     /// file_compaction/{filename}/{topic_start_offset_key} = ''
     file_compaction: Subspace,
+    /// agent_discovery/{service_url}
+    agent_discovery: Subspace,
 }
 
+#[derive(Debug, Clone, Eq)]
+pub struct AgentInfo {
+    pub service_url: SocketAddrV6,
+    pub last_heartbeat_ms: u128,
+}
+
+impl PartialEq for AgentInfo {
+    fn eq(&self, other: &Self) -> bool {
+        self.service_url == other.service_url
+    }
+}
+
+impl Hash for AgentInfo {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.service_url.hash(state);
+    }
+    
+}
 impl StreamingLayerSubspace {
     fn new() -> Self {
         Self {
             topics_files: Subspace::from("topics_files"),
             topic_partition_high_watermark: Subspace::from("topic_partition_high_watermark"),
             file_compaction: Subspace::from("file_compaction"),
+            agent_discovery: Subspace::from("agent_discovery"),
         }
+    }
+
+    #[inline]
+    pub fn get_agent_discovery_key(&self, service_url: SocketAddrV6) -> Vec<u8> {
+        self.agent_discovery.pack(&service_url.to_string())
     }
 
     #[inline]
@@ -103,6 +135,85 @@ impl StreamingLayer {
         Self {
             db,
             subspace: StreamingLayerSubspace::new(),
+        }
+    }
+
+    pub async fn send_heartbeat(&self, service_url: SocketAddrV6) -> anyhow::Result<()> {
+        let agent_discovery_key = self.subspace.get_agent_discovery_key(service_url);
+        let agent_discovery_key = &agent_discovery_key[..];
+        self.db
+            .run(|trx, _maybe_committed| async move {
+                let time = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("time went backwards")
+                    .as_millis();
+
+                trx.set(&agent_discovery_key[..], time.to_le_bytes().as_ref());
+
+                Ok(())
+            })
+            .await?;
+        Ok(())
+    }
+
+    pub async fn get_all_agents(&self) -> anyhow::Result<Vec<AgentInfo>> {
+        let trx = self.db.create_trx()?;
+        let mut agents = Vec::new();
+
+        let agent_discovery_subspace = self.subspace.agent_discovery.clone();
+        let range_option = RangeOption::from(agent_discovery_subspace.range());
+
+        let keys_values: Vec<FdbValue> = trx
+            .get_ranges_keyvalues(range_option, false)
+            .try_collect()
+            .await?;
+        for key_value in keys_values {
+            let service_url: String = agent_discovery_subspace.unpack(&key_value.key())?;
+
+            let service_url: SocketAddrV6 = SocketAddrV6::from_str(&service_url).expect("could not parse url");
+
+            let last_heartbeat_ms = byteorder::LE::read_u128(key_value.value().as_ref());
+            agents.push(AgentInfo {
+                service_url,
+                last_heartbeat_ms,
+            });
+        }
+
+        Ok(agents)
+    }
+
+
+    pub async fn get_alive_agents(&self) -> anyhow::Result<HashSet<AgentInfo>> {
+        let agents = self.get_all_agents().await?;
+        let current_unix_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_millis();
+
+        let agents = agents.into_iter().filter(|agent| current_unix_time - agent.last_heartbeat_ms < 10 * 1000).collect::<Vec<AgentInfo>>();
+        let agents = HashSet::from_iter(agents.into_iter());
+
+        Ok(agents)
+    }
+
+    pub async fn get_agent_last_heartbeat(
+        &self,
+        service_url: SocketAddrV6,
+    ) -> anyhow::Result<Duration> {
+        let agent_discovery_key = self.subspace.get_agent_discovery_key(service_url);
+        let agent_discovery_key = &agent_discovery_key[..];
+        let trx = self.db.create_trx()?;
+        let time = trx.get(&agent_discovery_key[..], false).await?;
+
+        match time {
+            None => {
+                return Err(anyhow::anyhow!("no heartbeat found"));
+            }
+            Some(time) => {
+                let time = byteorder::LE::read_u64(time.as_ref());
+                println!("time: {:?}", time);
+                return Ok(Duration::from_millis(time));
+            }
         }
     }
 
@@ -292,8 +403,9 @@ impl StreamingLayer {
 
         // get high watermark
         let high_watermark = {
-            let high_watermark_key = self.subspace
-            .get_topic_partition_high_watermark_key(topic_name, partition);
+            let high_watermark_key = self
+                .subspace
+                .get_topic_partition_high_watermark_key(topic_name, partition);
             Self::read_high_watermark(&trx, &high_watermark_key).await?
         };
 
@@ -351,8 +463,7 @@ impl StreamingLayer {
             };
             let data_location =
                 DataLocation::decode(value.as_ref()).expect("could not decode data location");
-            sorted_offset_file_map
-                .insert(offset, data_location);
+            sorted_offset_file_map.insert(offset, data_location);
         }
 
         Ok(sorted_offset_file_map)
@@ -447,7 +558,7 @@ impl StreamingLayer {
                 &batch_statistic.topic_name,
                 batch_statistic.partition,
             );
-            
+
             let offset_start_key = self.subspace.create_topic_partition_offset_file_key(
                 &batch_statistic.topic_name,
                 batch_statistic.partition,

@@ -183,7 +183,7 @@ impl S3File {
     }
 
     // FIXME: use Path or explicit type for filename since String is ambiguous
-    #[instrument(level="trace")]
+    #[instrument(level = "trace")]
     pub async fn upload_and_clear(&mut self) -> anyhow::Result<(String, BatchStatistics)> {
         let batch_statistics = self.bytes();
         // create unique filename
@@ -268,7 +268,7 @@ pub fn create_filepath() -> String {
             .duration_since(UNIX_EPOCH)
             .expect("time went backwards")
             .as_nanos()
-       );
+    );
     filename
     // format!("topics_data/{}", filename)
 }

@@ -5,11 +5,15 @@ mod message_collector;
 mod producer;
 mod s3;
 mod streaming_layer;
+mod ring;
 mod pubsub {
     tonic::include_proto!("pubsub");
 }
 
+use std::net::{Ipv6Addr, IpAddr, ToSocketAddrs, SocketAddrV6};
+use std::str::FromStr;
 use std::sync::Arc;
+use std::thread;
 
 use dotenv;
 use opendal::layers::LoggingLayer;
@@ -20,6 +24,7 @@ use pubsub::{
 };
 
 use ractor::rpc::CallResult;
+use ring::{CHRing, PhysicalNode};
 use tokio::sync::mpsc;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
@@ -211,8 +216,16 @@ async fn start_server() -> anyhow::Result<()> {
             .finish(),
     );
 
+    let port = 50053;
 
-    let addrs = ["[::1]:50051", "[::1]:50054"];
+    let url = SocketAddrV6::new(
+        Ipv6Addr::from_str("::1").expect("failed to parse ip"),
+        port,
+        0,
+        0,
+    );
+
+    let addrs = [format!("[::1]:{}", port)];
     let (tx, mut rx) = mpsc::unbounded_channel();
     for addr in &addrs {
         let addr = addr.parse()?;
@@ -223,9 +236,9 @@ async fn start_server() -> anyhow::Result<()> {
         let server = PubSubServer::new(pubsub_service)
             .max_decoding_message_size(max_message_size)
             .max_encoding_message_size(max_message_size);
-        let server = Server::builder()
-            .add_service(server)
-            .serve(addr);
+        let server = Server::builder().add_service(server).serve(addr);
+
+        start_heartbeat(url).expect("failed to start heartbeat");
 
         tokio::spawn(async move {
             if let Err(e) = server.await {
@@ -236,6 +249,40 @@ async fn start_server() -> anyhow::Result<()> {
         });
     }
     rx.recv().await;
+
+    Ok(())
+}
+
+fn start_heartbeat(url: SocketAddrV6) -> anyhow::Result<()> {
+    thread::Builder::new()
+        .name("heartbeat".to_string())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .worker_threads(1)
+                .build()
+                .expect("failed to create runtime");
+
+            rt.block_on(async move {
+                let streaming_layer = streaming_layer::StreamingLayer::new();
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
+
+                let agents = streaming_layer.get_alive_agents().await.expect("error getting agents");
+
+                let ch_ring = CHRing::from(&agents);
+
+                loop {
+                    interval.tick().await;
+                    info!("sending heartbeat...");
+                    streaming_layer
+                        .send_heartbeat(url)
+                        .await
+                        .expect("error sending heartbeat");
+
+                }
+            });
+        })
+        .expect("failed to spawn heartbeat thread");
 
     Ok(())
 }
