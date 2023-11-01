@@ -6,11 +6,12 @@ mod producer;
 mod s3;
 mod streaming_layer;
 mod ring;
+mod storage;
 mod pubsub {
     tonic::include_proto!("pubsub");
 }
 
-use std::net::{Ipv6Addr, IpAddr, ToSocketAddrs, SocketAddrV6};
+use std::net::{Ipv6Addr, SocketAddrV6};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
@@ -20,11 +21,11 @@ use opendal::layers::LoggingLayer;
 use opendal::services;
 use pubsub::pub_sub_server::PubSub;
 use pubsub::{
-    CommitRequest, CommitResponse, FetchRequest, FetchResponse, Messages, PublishBatchRequest,
+    CommitRequest, CommitResponse, FetchRequest, FetchResponse, PublishBatchRequest,
 };
 
 use ractor::rpc::CallResult;
-use ring::{CHRing, PhysicalNode};
+use ring::CHRing;
 use tokio::sync::mpsc;
 use tonic::transport::Server;
 use tonic::{Request, Response, Status};
@@ -266,10 +267,6 @@ fn start_heartbeat(url: SocketAddrV6) -> anyhow::Result<()> {
             rt.block_on(async move {
                 let streaming_layer = streaming_layer::StreamingLayer::new();
                 let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(1));
-
-                let agents = streaming_layer.get_alive_agents().await.expect("error getting agents");
-
-                let ch_ring = CHRing::from(&agents);
 
                 loop {
                     interval.tick().await;
