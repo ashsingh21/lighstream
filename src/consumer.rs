@@ -3,12 +3,11 @@ mod pubsub {
 }
 
 use anyhow::Ok;
-use tonic::{transport::Channel, client};
+use tonic::{client, transport::Channel};
 
 use pubsub::pub_sub_client::PubSubClient;
 
 use bytes::Bytes;
-
 
 const MAX_RECORDS: u32 = 200;
 
@@ -99,7 +98,9 @@ impl ConsumerBuilder {
             .await?;
 
         let limit = 256 * 1024 * 1024;
-        let client = PubSubClient::new(channel).max_encoding_message_size(limit).max_decoding_message_size(limit);
+        let client = PubSubClient::new(channel)
+            .max_encoding_message_size(limit)
+            .max_decoding_message_size(limit);
 
         Ok(Consumer {
             topic_name: self.topic_name.expect("This should not happen"),

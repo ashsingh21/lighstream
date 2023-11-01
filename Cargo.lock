@@ -826,6 +826,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c6201b9ff9fd90a5a3bac2e56a830d0caa509576f0e503818ee82c181b3437a"
 
 [[package]]
+name = "hashring"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c499ff70b6f65833dd5961abe0464eb295ec69993ba3ab0066f42be4fbb98b85"
+dependencies = [
+ "siphasher",
+]
+
+[[package]]
 name = "hdrhistogram"
 version = "7.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1127,6 +1136,7 @@ dependencies = [
  "flate2",
  "foundationdb",
  "futures",
+ "hashring",
  "human_bytes",
  "multimap 0.9.0",
  "opendal",
@@ -2154,6 +2164,12 @@ dependencies = [
  "thiserror",
  "time",
 ]
+
+[[package]]
+name = "siphasher"
+version = "0.3.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "38b58827f4464d87d377d175e90bf58eb00fd8716ff0a62f80356b5e61555d0d"
 
 [[package]]
 name = "slab"

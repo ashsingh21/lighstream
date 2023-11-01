@@ -1,17 +1,17 @@
 version: '3'
 services:
-  lightstream:
-    build:
-      context: .
-      dockerfile: Dockerfile  # Adjust if your Dockerfile has a different name
-      args:
-        FDB_VERSION: ${FDB_VERSION}
-    network_mode: host
-    environment:
-      FDB_COORDINATOR: ${FDB_COORDINATOR}
-      FDB_API_VERSION: ${FDB_API_VERSION}
-    ports:
-      - 50051:50051/tcp
+  # lightstream:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile  # Adjust if your Dockerfile has a different name
+  #     args:
+  #       FDB_VERSION: ${FDB_VERSION}
+  #   network_mode: host
+  #   environment:
+  #     FDB_COORDINATOR: ${FDB_COORDINATOR}
+  #     FDB_API_VERSION: ${FDB_API_VERSION}
+  #   ports:
+  #     - 50051:50051/tcp
     # depends_on:
     #   - fdb-coordinator
     #   - fdb-server-1
