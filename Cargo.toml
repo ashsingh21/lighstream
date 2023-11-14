@@ -32,20 +32,18 @@ uuid = "1.4.1"
 console-subscriber = "0.2.0"
 hashring = "0.3.2"
 
-# [profile.release]
-# lto = true
+[profile.release]
+lto = true
 
-[[bin]] # Bin to run the HelloWorld gRPC server
-name = "lightstream"
-path = "src/pubsub_server.rs"
+[[bin]]
+name = "client"
+path = "src/client.rs"
 
 # [[bin]]
 # name ="s3"
 # path = "src/s3.rs"
 
-[[bin]] # Bin to run the HelloWorld gRPC client
-name = "client"
-path = "src/client.rs"
+
 
 # [[bin]]
 # name = "metadata"
