@@ -1,6 +1,6 @@
 # Lightstream: Cloud-Native Data Streaming Platform
 
-# Note: The project is in pre-alpha stage.
+Note: The project is in pre-alpha stage.
 
 ## Welcome to Lightstream
 
