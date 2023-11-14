@@ -1,9 +1,5 @@
 # Lightstream: Cloud-Native Data Streaming Platform
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![GitHub Issues](https://img.shields.io/github/issues/your-username/lightstream.svg)](https://github.com/your-username/lightstream/issues)
-[![GitHub Stars](https://img.shields.io/github/stars/your-username/lightstream.svg)](https://github.com/your-username/lightstream/stargazers)
-
 ## Welcome to Lightstream
 
 Lightstream is your cloud-native data streaming solution, harnessing the power of cloud storage for seamless, reliable data processing.
