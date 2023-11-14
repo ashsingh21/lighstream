@@ -1,59 +1,31 @@
-# Milestones
-* Implement basic metadata cluster using Syclladb
-* Implement metadata client and syclla client
-* Implement lightstream client that uses metadata client internally 
-* implement basic producer and consumer -> every message gets commited blocking and consumer can stream that data
+# Lightstream: Cloud-Native Data Streaming Platform
 
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![GitHub Issues](https://img.shields.io/github/issues/your-username/lightstream.svg)](https://github.com/your-username/lightstream/issues)
+[![GitHub Stars](https://img.shields.io/github/stars/your-username/lightstream.svg)](https://github.com/your-username/lightstream/stargazers)
 
-When I comeback I need to setup MinIO on my ssd then find a library that will allow me to stream data to it, with retry and multipart
+## Welcome to Lightstream
 
-TODO:
-The design of the Agent could be Agent {Router;  Service (service is currently agent, need to chnage it to service then wrap it in agent)}
+Lightstream is your cloud-native data streaming solution, harnessing the power of cloud storage for seamless, reliable data processing.
 
-Note: ActorFactory uses unbounded queue so it can cause exhaustion of memory if workers dont process  queue fast enough
+### Introduction
 
-Note: you will need to install the fdbclient on the host to connect to the cluster
+Traditional frameworks like Kafka often face operational challenges due to the need for data replication across brokers for reliability. Lightstream takes a different approach by directly utilizing cloud storage—such as S3 and Google Cloud—as the primary storage layer. This eliminates the complexities associated with managing and maintaining replicated data across different brokers.
 
-TODO: Build table abstraction over topic subspaces
+#### Key Features
 
-TODO" add multipart https://github.com/apache/incubator-opendal/blob/c7bfe23dd1a0ec796e6751ead8a59d98fb13140c/core/src/docs/rfcs/1420_object_writer.md?plain=1#L21
+- **Cloud Storage Reliability**: Lightstream places the burden of storage reliability on cloud storage, leveraging the robust capabilities of platforms like S3 and Google Cloud.
 
+- **Stateless Agents**: Lightstream's "brokers" are stateless agents designed to efficiently batch incoming data into smaller units, pushing them directly to cloud storage in a custom file format.
 
-Good Read on AWS s3 polic7y stuff
-https://www.chrisfarris.com/bucket-policy-examples/#:~:text=Principal%20is%20used%20by%20Resource,IAM)%20to%20users%20or%20roles.
+- **Compaction for Efficiency**: Small files are intelligently compacted to create larger, more efficient files. This optimization enhances the streaming experience for data consumers.
 
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Sid": "Statement1",
-            "Effect": "Allow",
-            "Principal": {
-                "AWS": "arn:aws:iam::251752769356:user/naditest"
-            },
-            "Action": "s3:*",
-            "Resource": [
-                "arn:aws:s3:::nadi",
-                "arn:aws:s3:::nadi/*"
-            ]
-        }
-    ]
-}
+### Challenges with Traditional Approaches
 
+Traditional streaming frameworks like Kafka introduce operational challenges related to data replication and broker management. These challenges often require significant effort in terms of maintenance and infrastructure scaling.
 
-// S3 from EC2
-Total bytes: 3.9 MiB sent in: 758.027431ms
-Total bytes: 3.9 MiB sent in: 454.797803ms
-Total bytes: 3.9 MiB sent in: 507.121272ms
-Total bytes: 3.9 MiB sent in: 492.992896ms
-Total bytes: 3.9 MiB sent in: 509.209182ms
-Total bytes: 3.9 MiB sent in: 735.220762ms
-Total bytes: 3.9 MiB sent in: 682.862694ms
-Total bytes: 3.9 MiB sent in: 443.265106ms
+#### Stateless Agents: A Solution
 
+Lightstream addresses these challenges through the introduction of stateless agents. These agents simplify the streaming process by efficiently batching data and pushing it to cloud storage, eliminating the need for complex data replication strategies. This not only streamlines the operational aspects but also enhances the overall reliability and efficiency of the streaming pipeline.
 
-// S3 from local machine
-Total bytes: 3.9 MiB sent in: 2.373315921s
-Total bytes: 3.9 MiB sent in: 2.648950867s
-Total bytes: 3.9 MiB sent in: 1.941931869s
-Total bytes: 3.9 MiB sent in: 2.037334285s
+Explore Lightstream, embrace the simplicity of cloud-native data streaming, and contribute to a more resilient and scalable data processing future!
