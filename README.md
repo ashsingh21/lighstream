@@ -1,5 +1,7 @@
 # Lightstream: Cloud-Native Data Streaming Platform
 
+# Note: The project is in pre-alpha stage.
+
 ## Welcome to Lightstream
 
 Lightstream is your cloud-native data streaming solution, harnessing the power of cloud storage for seamless, reliable data processing.
